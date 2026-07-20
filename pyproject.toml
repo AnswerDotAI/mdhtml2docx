@@ -15,7 +15,7 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = []
+dependencies = ["lxml"]
 
 [project.optional-dependencies]
 dev = [
@@ -32,3 +32,10 @@ version = { attr = "xhtml2docx.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["xhtml2docx"]
+
+[tool.setuptools.package-data]
+xhtml2docx = ["schemas/*", "templates/*", "word.sdef"]
+
+[tool.pytest.ini_options]
+markers = ["slow: needs live GUI apps or long runtimes; deselected by default"]
+addopts = "-m 'not slow'"
