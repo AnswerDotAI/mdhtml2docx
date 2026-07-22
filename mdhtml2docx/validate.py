@@ -11,7 +11,7 @@ MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 @cache
 def wml_schema():
     "Compiled transitional WordprocessingML schema (see schemas/SOURCES.md); ~44ms, hence the cache"
-    return etree.XMLSchema(etree.parse(str(files('xhtml2docx')/'schemas'/'wml.xsd')))
+    return etree.XMLSchema(etree.parse(str(files('mdhtml2docx')/'schemas'/'wml.xsd')))
 
 def mce_strip(root):
     "Minimal MCE consumer processing, in place: drop attributes and elements in `mc:Ignorable` namespaces, and mc:* attributes"

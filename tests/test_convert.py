@@ -1,11 +1,12 @@
-import subprocess, zipfile
+import base64, subprocess, zipfile
 from pathlib import Path
 
 from fastcore.test import test_eq as teq, test as tt, test_fail as tfail
 from fastcore.utils import in_
 
-from xhtml2docx.convert import convert
-from xhtml2docx.validate import fast_checks
+from mdhtml import parse_mdhtml, sample_md, to_mdhtml
+from mdhtml2docx.convert import convert
+from mdhtml2docx.validate import fast_checks
 
 
 def pandoc(path, to='markdown'):
@@ -26,6 +27,20 @@ def test_skeleton(tmp_path):
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     # pandoc-compatible First Paragraph convention: doc-start paragraph, then Body Text
     assert doc.index('w:val="FirstParagraph"') < doc.index('w:val="BodyText"')
+
+
+def test_html5_fragment_and_mutable_dom_input(tmp_path):
+    out = tmp_path/'t.docx'
+    dom = parse_mdhtml('<p>Before <div>middle</div> after.</p><span zoop:33="x">tail</span>'
+        '<!-- this is a -- comment --><input type="date"><template><p>hidden</p></template>')
+    dom.children[1].attrs['data-kind'] = 'changed'
+    warns = convert(dom, out)
+    teq(warns, ["unhandled inline <input type='date'>; dropped"])
+    md = pandoc(out)
+    for s in ('Before', 'middle', 'after.', 'tail'): tt(s, md, in_)
+    assert 'hidden' not in md
+    convert('<template><p>still hidden</p></template>', out)
+    assert '<w:p>' not in zipfile.ZipFile(out).read('word/document.xml').decode()
 
 
 def test_basic_blocks(tmp_path):
@@ -53,8 +68,8 @@ def test_lists(tmp_path):
         '<ol>\n<li>first</li>\n<li>second</li>\n</ol>\n'
         '<ol start="5">\n<li>fifth</li>\n</ol>\n'
         '<ul class="task-list">\n'
-        '<li><input type="checkbox" disabled="disabled" checked="checked" /> done</li>\n'
-        '<li><input type="checkbox" disabled="disabled" /> todo</li>\n</ul>', out)
+        '<li><input type="checkbox" disabled="disabled" checked="checked"> done</li>\n'
+        '<li><input type="checkbox" disabled="disabled"> todo</li>\n</ul>', out)
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     lines = [' '.join(l.split()) for l in pandoc(out).splitlines()]
@@ -94,9 +109,9 @@ def test_more_features(tmp_path):
     img = Path(__file__).parent/'fixtures'/'tiny.png'
     warns = convert(
         '<p>H<sub>2</sub>O, E=mc<sup>2</sup>, <del>gone</del>, <mark>hot</mark>.</p>\n'
-        '<hr />\n'
+        '<hr>\n'
         '<dl>\n<dt>term</dt>\n<dd>definition here</dd>\n</dl>\n'
-        f'<p><img src="{img}" alt="tiny pic" /></p>\n'
+        f'<p><img src="{img}" alt="tiny pic"></p>\n'
         '<p>Noted.<sup id="fnref-a"><a href="#fn-a" class="footnote-ref" role="doc-noteref">1</a></sup></p>\n'
         '<p>Math: <span class="math inline">a^2+b^2</span>.</p>\n'
         '<div class="math display">E = mc^2</div>\n'
@@ -128,7 +143,7 @@ def test_imgsize():
         b = io.BytesIO()
         Image.new('RGB' if fmt != 'GIF' else 'P', size).save(b, fmt, **kw)
         return b.getvalue()
-    from xhtml2docx.wml import imgsize
+    from mdhtml2docx.wml import imgsize
     teq(imgsize(enc('PNG', (4, 2))), (4, 2, 96, 96))
     teq(imgsize(enc('PNG', (10, 5), dpi=(150, 150))), (10, 5, 150, 150))
     teq(imgsize(enc('JPEG', (10, 5), dpi=(200, 100))), (10, 5, 200, 100))
@@ -151,12 +166,11 @@ def test_math(tmp_path):
 
 
 def test_sample(tmp_path):
-    "The loop-closer: xhtmlmd's packaged sample -> docx (smart, legally numbered); every style in STYLE_MAP is exercised and resolves"
-    import xhtmlmd
+    "The loop-closer: mdhtml's packaged sample -> docx (smart, legally numbered); every emitted style resolves"
     from lxml import etree
-    from xhtml2docx.styles import STYLE_MAP, style_id
+    from mdhtml2docx.styles import STYLE_MAP, style_id
     out = tmp_path/'sample.docx'
-    warns = convert(xhtmlmd.to_xhtml(xhtmlmd.sample_md(), balance=True, smart=True), out, number_headings='legal')
+    warns = convert(to_mdhtml(sample_md(), smart=True, auto_ids=True, implicit_figures=True), out, number_headings='legal')
     teq(warns, ['remote image not embedded: https://dummyimage.com/96x48/eeeeee/333333.png&text=demo',
                 'remote image not embedded: https://dummyimage.com/96x48/eeeeee/333333.png&text=fig'])
     teq(fast_checks(out), 'valid')
@@ -177,8 +191,8 @@ def test_sample(tmp_path):
               '<w:br w:type="page"/>', 'Delivery stages', '“'): tt(s, doc, in_)
     tt('updateFields', z.read('word/settings.xml').decode(), in_)
     md = pandoc(out)
-    for s in ('# xhtmlmd feature sample', '###### Week one', 'Temperature 1961-1990', '-89.2',
-              r'mc\hat{}2$$', '[^1]:', 'A Markdown parser that renders XHTML fragments.'): tt(s, md, in_)
+    for s in ('# mdhtml feature sample', '###### Week one', 'Temperature 1961-1990', '-89.2',
+              r'mc\hat{}2$$', '[^1]:', 'A Markdown parser that renders MDHTML fragments.'): tt(s, md, in_)
 
 
 def test_code_highlight(tmp_path):
@@ -202,10 +216,10 @@ def test_code_highlight(tmp_path):
 def test_theme_refs(tmp_path):
     "Multi-reference composition: later entries contribute styles later-wins; theme_ref writes an equivalent artifact"
     from fastpylight import theme_colors
-    from xhtml2docx.styles import ref_path, theme_ref
-    xhtml = '<pre><code class="language-python">def f(x):\n    return x\n</code></pre>'
+    from mdhtml2docx.styles import ref_path, theme_ref
+    mdhtml = '<pre><code class="language-python">def f(x):\n    return x\n</code></pre>'
     out = tmp_path/'t.docx'
-    convert(xhtml, out, reference=[ref_path(), 'dracula'])
+    convert(mdhtml, out, reference=[ref_path(), 'dracula'])
     teq(fast_checks(out), 'valid')
     styles = zipfile.ZipFile(out).read('word/styles.xml').decode()
     tt('w:styleId="HlKeyword"', styles, in_)
@@ -217,18 +231,18 @@ def test_theme_refs(tmp_path):
     ref = theme_ref('dracula', tmp_path/'dracula.docx')
     teq(fast_checks(ref), 'valid')
     out2 = tmp_path/'t2.docx'
-    convert(xhtml, out2, reference=[ref_path(), ref])
+    convert(mdhtml, out2, reference=[ref_path(), ref])
     ids = lambda p: sorted(s.split('"')[1] for s in zipfile.ZipFile(p).read('word/styles.xml').decode().split('w:styleId=')[1:])
     teq(ids(out2), ids(out))
     # single custom reference (no theme entry) = plain code
     out3 = tmp_path/'t3.docx'
-    convert(xhtml, out3, reference=ref_path())
+    convert(mdhtml, out3, reference=ref_path())
     assert 'HlKeyword' not in zipfile.ZipFile(out3).read('word/document.xml').decode()
 
 
 def test_segments_scopes():
     "segments returns raw dotted scopes tiling the source; markdown quotation keeps embedded fences inert"
-    from xhtml2docx.hilite import segments
+    from mdhtml2docx.hilite import segments
     md = 'Some `inline` and:\n\n``` rust\nfn main() {}\n```\n'
     segs = segments(md, 'markdown')
     teq(next(s for t, s in segs if 'fn main' in t), 'markup.raw.block')
@@ -238,33 +252,38 @@ def test_segments_scopes():
 
 def test_raw_docx(tmp_path):
     out = tmp_path/'t.docx'
+    b64 = base64.b64encode(b'<w:r><w:t>B64</w:t></w:r>').decode()
     warns = convert(
         '<p>before</p>\n'
-        '<script type="text/x-docx">&lt;w:p&gt;&lt;w:r&gt;&lt;w:br w:type="page"/&gt;&lt;/w:r&gt;&lt;/w:p&gt;</script>\n'
-        '<p>a <script type="text/x-docx">&lt;w:r&gt;&lt;w:t&gt;RAW&lt;/w:t&gt;&lt;/w:r&gt;</script> b</p>\n'
-        '<script type="text/x-latex">\\newpage</script>', out)
+        '<script type="application/vnd.mdhtml.raw" data-format="docx"><w:p><w:r><w:br w:type="page"/></w:r></w:p></script>\n'
+        '<p>a <script type="application/vnd.mdhtml.raw" data-format="docx" data-encoding="html">&lt;w:r&gt;&lt;w:t&gt;RAW&lt;/w:t&gt;&lt;/w:r&gt;</script> b</p>\n'
+        f'<p><script type="application/vnd.mdhtml.raw" data-format="docx" data-encoding="base64">{b64}</script></p>\n'
+        '<script type="application/vnd.mdhtml.raw" data-format="latex">\\newpage</script>', out)
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     tt('<w:br w:type="page"/>', doc, in_)
     md = pandoc(out)
-    tt('a RAW b', md, in_)
+    for s in ('a RAW b', 'B64'): tt(s, md, in_)
     assert 'newpage' not in doc  # unrecognized format dropped
-    warns = convert('<script type="text/x-docx">&lt;w:oops&gt;</script>', out)
+    warns = convert('<script type="application/vnd.mdhtml.raw" data-format="docx"><w:oops></script>', out)
     teq(len(warns), 1)
     tt('malformed', warns[0], in_)
+    warns = convert('<script type="application/vnd.mdhtml.raw" data-format="docx" data-encoding="base64">!!!</script>', out)
+    teq(len(warns), 1)
+    tt('malformed base64', warns[0], in_)
 
 
 def test_xrefs(tmp_path):
     out = tmp_path/'t.docx'
     warns = convert(
         '<h1 id="sec-intro">Intro</h1>\n<h2 id="sec-pay">Payment terms</h2>\n'
-        '<p>See <a href="#sec-pay" data-ref="data-ref"></a> and <a href="#sec-intro" data-ref="bare"></a>, '
-        'per <a href="#sec-pay" data-ref="data-ref">Clause</a>, also '
-        '<span class="refs"><a href="#sec-intro" data-ref="data-ref"></a>'
-        '<a href="#sec-pay" data-ref="data-ref"></a></span>, the '
-        '<a href="#sec-pay" data-ref="bare" ref="text"></a> clause, page '
-        '<a href="#sec-pay" data-ref="bare" ref="page"></a>.</p>', out, number_headings='legal')
+        '<p>See <a href="#sec-pay" data-ref=""></a> and <a href="#sec-intro" data-ref="bare"></a>, '
+        'per <a href="#sec-pay" data-ref="">Clause</a>, also '
+        '<span data-refs=""><a href="#sec-intro" data-ref=""></a>'
+        '<a href="#sec-pay" data-ref=""></a></span>, the '
+        '<a href="#sec-pay" data-ref="bare text"></a> clause, page '
+        '<a href="#sec-pay" data-ref="bare page"></a>.</p>', out, number_headings='legal')
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
@@ -274,9 +293,10 @@ def test_xrefs(tmp_path):
     for s in ('lowerLetter', '(%2)', 'Heading1'): tt(s, num, in_)
     tt('updateFields', zipfile.ZipFile(out).read('word/settings.xml').decode(), in_)
     tt('w:numPr', zipfile.ZipFile(out).read('word/styles.xml').decode(), in_)
-    tfail(lambda: convert('<p><a href="#nope" data-ref="data-ref"></a></p>', out), contains='#nope')
-    tfail(lambda: convert('<p id="z-a"><a href="#z-a" data-ref="data-ref"></a></p>', out),
+    tfail(lambda: convert('<p><a href="#nope" data-ref=""></a></p>', out), contains='#nope')
+    tfail(lambda: convert('<p id="z-a"><a href="#z-a" data-ref=""></a></p>', out),
               contains="reference type 'z'")
+    tfail(lambda: convert('<p><a href="#sec-pay" data-ref="page text"></a></p>', out), contains='conflicting data-ref')
 
 
 def test_xrefs_numbered_reference_doc(tmp_path):
@@ -285,7 +305,7 @@ def test_xrefs_numbered_reference_doc(tmp_path):
     convert('<h1 id="a">A</h1>', ref, number_headings='legal')
     out = tmp_path/'t.docx'
     warns = convert('<h1 id="sec-a">A</h1>\n<ul>\n<li>one</li>\n</ul>\n'
-                    '<p>See <a href="#sec-a" data-ref="data-ref"></a>.</p>', out, reference=ref)
+                    '<p>See <a href="#sec-a" data-ref=""></a>.</p>', out, reference=ref)
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     num = zipfile.ZipFile(out).read('word/numbering.xml').decode()
@@ -322,21 +342,22 @@ def test_caption_refs(tmp_path):
     out = tmp_path/'t.docx'
     img = Path(__file__).parent/'fixtures'/'tiny.png'
     warns = convert(
-        f'<figure id="fig-plot" class="wide"><img src="{img}" alt="A plot" /><figcaption>A plot</figcaption></figure>\n'
+        f'<figure id="fig-plot" class="wide"><img src="{img}" alt=""><figcaption>A plot</figcaption></figure>\n'
         '<table id="tbl-r"><caption>Results <em>now</em></caption><thead><tr><th>a</th></tr></thead>'
         '<tbody><tr><td>1</td></tr></tbody></table>\n'
-        '<p>See <a href="#fig-plot" data-ref="data-ref"></a> and <a href="#tbl-r" data-ref="bare"></a>, or '
-        '<span class="refs"><a href="#fig-plot" data-ref="data-ref"></a>'
-        '<a href="#tbl-r" data-ref="data-ref"></a></span>.</p>', out)
+        '<p>See <a href="#fig-plot" data-ref=""></a> and <a href="#tbl-r" data-ref="bare"></a>, or '
+        '<span data-refs=""><a href="#fig-plot" data-ref=""></a>'
+        '<a href="#tbl-r" data-ref=""></a></span>.</p>', out)
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     for s in (' SEQ Figure ', ' SEQ Table ', r'REF fig_plot \h', r'REF tbl_r_n \h',
               'Results ', 'A plot'): tt(s, doc, in_)
+    tt('descr="A plot"', doc, in_)
     assert 'Figures' not in doc                  # mixed group: per-item singular prefixes
     assert r'REF fig_plot \w' not in doc         # caption targets never use \w
     md = pandoc(out)
     tt('A plot', md, in_)
     # a ref to an id that never becomes a bookmark is an error, not a dud field
-    tfail(lambda: convert('<div id="d-x"><p>hi</p></div><p><a href="#d-x" data-ref="data-ref"></a></p>', out),
+    tfail(lambda: convert('<div id="d-x"><p>hi</p></div><p><a href="#d-x" data-ref=""></a></p>', out),
           contains='#d-x')

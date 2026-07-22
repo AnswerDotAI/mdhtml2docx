@@ -3,19 +3,19 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "xhtml2docx"
+name = "mdhtml2docx"
 dynamic = ["version"]
 description = "A Python package"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
-authors = [{ name = "xhtml2docx contributors" }]
+license = "Apache-2.0"
+authors = [{ name = "mdhtml2docx contributors" }]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = ["lxml"]
+dependencies = ["lxml", "mdhtml>=0.1.13", "justhtml>=3.9.0"]
 
 [project.optional-dependencies]
 dev = [
@@ -25,16 +25,19 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/AnswerDotAI/xhtml2docx"
+Homepage = "https://github.com/AnswerDotAI/mdhtml2docx"
 
 [tool.setuptools.dynamic]
-version = { attr = "xhtml2docx.__version__" }
+version = { attr = "mdhtml2docx.__version__" }
+
+[tool.setuptools]
+include-package-data = false
 
 [tool.setuptools.packages.find]
-include = ["xhtml2docx"]
+include = ["mdhtml2docx"]
 
 [tool.setuptools.package-data]
-xhtml2docx = ["schemas/*", "templates/*", "word.sdef"]
+mdhtml2docx = ["schemas/*", "templates/*", "word.sdef"]
 
 [tool.pytest.ini_options]
 markers = ["slow: needs live GUI apps or long runtimes; deselected by default"]

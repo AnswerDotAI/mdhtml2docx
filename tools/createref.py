@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Generate the committed template `xhtml2docx/templates/reference.docx` from a seed archive.
+"""Generate the committed template `mdhtml2docx/templates/reference.docx` from a seed archive.
 
 The seed (`_data/empty.docx`, a fresh empty document saved by Word 16.111) supplies theme, fonts,
 settings, and Word's own modern definitions for the styles we keep; this script strips styles.xml
@@ -8,8 +8,8 @@ centering), authors the definitions Word leaves latent, scrubs personal metadata
 fast_checks == 'valid' and every STYLE_MAP name defined. See meta/STATUS.md, template section."""
 import zipfile
 from lxml import etree
-from xhtml2docx.styles import STYLE_MAP, style_id
-from xhtml2docx.validate import fast_checks
+from mdhtml2docx.styles import STYLE_MAP, style_id
+from mdhtml2docx.validate import fast_checks
 
 W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 
@@ -105,10 +105,10 @@ def scrub_props(xml):
     for tag in ('{http://purl.org/dc/elements/1.1/}creator',
                 '{http://schemas.openxmlformats.org/package/2006/metadata/core-properties}lastModifiedBy'):
         e = root.find(tag)
-        if e is not None: e.text = 'xhtml2docx'
+        if e is not None: e.text = 'mdhtml2docx'
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
-def build(seed='_data/empty.docx', out='xhtml2docx/templates/reference.docx'):
+def build(seed='_data/empty.docx', out='mdhtml2docx/templates/reference.docx'):
     z = zipfile.ZipFile(seed)
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zo:
         for i in z.infolist():

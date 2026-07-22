@@ -1,13 +1,16 @@
-"""Convert xhtmlmd XHTML fragments to docx.
+"""Convert MDHTML fragments to docx.
 
 Write-only, reference-archive architecture: the reference template supplies styles/theme/fonts,
 we generate word/document.xml (plus footnotes/numbering/media parts as needed) into a copy of its
-archive. Block and inline walkers mirror the xhtmlmd element inventory; STYLE_MAP names every
+archive. Block and inline walkers mirror the MDHTML element inventory; STYLE_MAP names every
 style we emit."""
 import posixpath, re, zipfile
 from copy import deepcopy
 from pathlib import Path
+from justhtml import Comment, DocumentFragment, Element, Text
 from lxml import etree
+from mdhtml import parse_mdhtml
+from mdhtml.export import REFTYPES, decode_raw, group_plan, ref_tokens, ref_variant
 from .styles import SCHEMES, STYLE_MAP, style_id, theme_styles
 from .styles import ref_path as _refpath
 from .wml import *
@@ -18,15 +21,24 @@ __all__ = ['convert']
 
 def _sid(key): return style_id(STYLE_MAP[key])
 
-BLOCK_TAGS = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'ul', 'ol', 'pre', 'table',
-              'dl', 'div', 'hr', 'section', 'figure'}
+BLOCK_TAGS = set(('address article aside blockquote details dialog div dl fieldset figure footer form h1 h2 h3 h4 h5 h6 '
+    'header hgroup hr main menu nav ol p pre search section table ul').split())
+INERT_TAGS = {'base', 'link', 'meta', 'style', 'template', 'title'}
 
-def parse_frag(xhtml):
-    "Parse an XHTML fragment (any number of top-level elements) into a list of elements"
-    try: return list(etree.fromstring(f'<root>{xhtml}</root>'))
-    except etree.XMLSyntaxError as e:
-        raise ValueError(f'input is not well-formed XML ({e}); raw HTML in markdown needs '
-                         'xhtmlmd.to_xhtml(..., balance=True)') from e
+def _tag(el): return el.name
+def _get(el, key, default=None): return el.attrs.get(key, default)
+def _els(el): return [n for n in el.children if isinstance(n, Element)]
+def _walk(el):
+    yield el
+    for child in _els(el): yield from _walk(child)
+def _classes(el): return (_get(el, 'class') or '').split()
+def _is_raw(el): return _tag(el) == 'script' and _get(el, 'type') == 'application/vnd.mdhtml.raw'
+
+def parse_frag(src):
+    "Parse an MDHTML body fragment, or return an existing mutable fragment"
+    if isinstance(src, DocumentFragment): return src
+    if not isinstance(src, str): raise TypeError('input must be an MDHTML string or DocumentFragment')
+    return parse_mdhtml(src)
 
 class Converter:
     def __init__(self, reference=None, base=None, reftypes=None, number_headings=None):
@@ -53,8 +65,7 @@ class Converter:
         self._bknames = {}   # element id -> Word-legal bookmark name
         self.has_fields = False
         self.contrib_numels, self.contrib_styleels = [], []
-        self.reftypes = (dict(sec=('Section', 'Sections'), fig=('Figure', 'Figures'),
-                              tbl=('Table', 'Tables')) | (reftypes or {}))
+        self.reftypes = REFTYPES | (reftypes or {})
         tdoc = etree.fromstring(self.refz.read('word/document.xml'))
         self.sectpr = deepcopy(tdoc.find(f'{{{W}}}body/{{{W}}}sectPr'))
         pg, mar = self.sectpr.find(qn('w:pgSz')), self.sectpr.find(qn('w:pgMar'))
@@ -156,13 +167,16 @@ class Converter:
 
     def link(self, el, fmt):
         "w:hyperlink for `a`: internal '#x' -> anchor, external -> relationship (deduped per URL); data-ref -> field"
-        if el.get('data-ref') is not None:
+        if _get(el, 'data-ref') is not None:
             fld = self.ref_fld(el, fmt)
             return self.ref_prefix(el, fmt) + fld
-        href = el.get('href')
+        href = _get(el, 'href')
         if not href: return self.runs(el, fmt)
         runs = self.runs(el, fmt | {'rstyle': _sid('hyperlink')})
         if href.startswith('#'): return [E('w:hyperlink', {'w:anchor': self.bkname(href[1:])}, *runs)]
+        return self.external_link(href, runs)
+
+    def external_link(self, href, runs):
         if href not in self._urlrids:
             self._urlrids[href] = self.rid()
             self.rels.append((self._urlrids[href], f'{R}/hyperlink', href, True))
@@ -181,10 +195,10 @@ class Converter:
 
     def ref_prefix(self, el, fmt, plural=False):
         "Literal runs before a reference field: override text, the type prefix word, or nothing for bare and caption refs"
-        pre = ''.join(el.itertext()).strip()
+        pre = el.to_text().strip()
         if not pre:
-            tgt = (el.get('href') or '#')[1:]
-            if el.get('data-ref') == 'bare' or self.reftarget.get(tgt) == 'caption': return []
+            tgt = (_get(el, 'href') or '#')[1:]
+            if 'bare' in ref_tokens(_get(el, 'data-ref')) or self.reftarget.get(tgt) == 'caption': return []
             t = tgt.split('-')[0]
             if t not in self.reftypes:
                 raise ValueError(f'unknown reference type {t!r}; pass reftypes= to define its prefix')
@@ -195,15 +209,15 @@ class Converter:
         """REF/PAGEREF field for a cross-reference `a`, with a cached placeholder Word replaces on update.
         Heading/paragraph targets number via `\\w`; caption targets return their bookmarked 'Label N' text
         (or the number-only `_n` bookmark for bare/leaf/rel refs), so `\\w` never applies to them."""
-        tgt = (el.get('href') or '#')[1:]
+        tgt = (_get(el, 'href') or '#')[1:]
+        tokens = ref_tokens(_get(el, 'data-ref'))
         if tgt not in self.reftarget:
             raise ValueError(f'cross-reference target #{tgt} not found (targets are headings, paragraphs, figures, and tables with ids)')
-        kind = el.get('ref', 'full')
-        if kind not in self.REFSWITCH: raise ValueError(f'unknown ref= variant {kind!r}')
+        kind = ref_variant(tokens)
         nm, self.has_fields = self.bkname(tgt), True
         if kind == 'page': instr, cached = rf' PAGEREF {nm} \h ', '#'
         elif self.reftarget[tgt] == 'caption':
-            bare = el.get('data-ref') == 'bare' or kind in ('leaf', 'rel')
+            bare = 'bare' in tokens or kind in ('leaf', 'rel')
             instr, cached = (rf' REF {nm}_n \h ' if bare else rf' REF {nm} \h '), '#'
         else:
             sw = self.REFSWITCH[kind]
@@ -212,44 +226,43 @@ class Converter:
         return [E('w:fldSimple', {'w:instr': instr}, E('w:r', self.rpr(fmt), E('w:t', cached)))]
 
     def ref_group(self, el, fmt):
-        "span.refs: one pluralized prefix for a same-type group, per-item singular prefixes for mixed types; never range-collapsed"
-        refs = [c for c in el if etree.QName(c).localname == 'a']
-        flds = [self.ref_fld(a, fmt) for a in refs]
-        mixed = len({(a.get('href') or '#')[1:].split('-')[0] for a in refs}) > 1
+        "data-refs span: one pluralized prefix for a same-type group, per-item singular prefixes for mixed types; never range-collapsed"
+        refs = [c for c in _els(el) if _tag(c) == 'a']
+        types = [(_get(a, 'href') or '#')[1:].split('-')[0] for a in refs]
         out = []
-        for i, (a, f) in enumerate(zip(refs, flds)):
-            if i: out += self.text_runs(' and ' if i == len(flds) - 1 else ', ', fmt)
-            if mixed or i == 0: out += self.ref_prefix(a, fmt, plural=not mixed and len(refs) > 1)
-            out += f
+        for (sep, pre, plural), a in zip(group_plan(types), refs):
+            if sep: out += self.text_runs(sep, fmt)
+            if pre: out += self.ref_prefix(a, fmt, plural=plural)
+            out += self.ref_fld(a, fmt)
         return out
 
     def custom_style(self, el, kind):
         "Style id for an explicit custom-style attr (stubbed + warned if undefined), else a class matching a reference style name"
-        if cs := el.get('custom-style'):
+        if cs := _get(el, 'custom-style'):
             if cs.lower() in self.refstyles: return self.refstyles[cs.lower()]
             if cs not in self.stubs:
                 self.stubs[cs] = (kind, re.sub(r'\W', '', cs) or f'Custom{len(self.stubs)}')
                 self.warn(f'custom style {cs!r} not in reference doc; stub injected')
             return self.stubs[cs][1]
-        return next((self.refstyles[c.lower()] for c in (el.get('class') or '').split()
-                     if c.lower() in self.refstyles), None)
+        return next((self.refstyles[c.lower()] for c in _classes(el) if c.lower() in self.refstyles), None)
 
     def span(self, el, fmt):
         "Inline span: math -> inline m:oMath zone (linear source, dialect-agnostic), custom style -> rStyle, else transparent"
-        if 'refs' in (el.get('class') or '').split(): return self.ref_group(el, fmt)
-        if 'math' in (el.get('class') or '').split(): return [self.omath(el)]
+        if _get(el, 'data-refs') is not None: return self.ref_group(el, fmt)
+        if 'math' in _classes(el): return [self.omath(el)]
         if sid := self.custom_style(el, 'character'): return self.runs(el, fmt | {'rstyle': sid})
         return self.runs(el, fmt)
 
     def omath(self, el):
         "An m:oMath zone holding `el`'s text as linear-format math runs"
-        return E('m:oMath', E('m:r', E('m:t', ''.join(el.itertext()), {'xml:space': 'preserve'})))
+        return E('m:oMath', E('m:r', E('m:t', el.to_text(), {'xml:space': 'preserve'})))
 
     def fnref(self, el, fmt):
         "Footnote-reference run for a sup>a.footnote-ref, or None when `el` is an ordinary sup"
-        a = el[0] if len(el) == 1 and etree.QName(el[0]).localname == 'a' else None
-        if a is None or 'footnote-ref' not in (a.get('class') or ''): return None
-        key = (a.get('href') or '#')[1:]
+        children = _els(el)
+        a = children[0] if len(children) == 1 and _tag(children[0]) == 'a' else None
+        if a is None or 'footnote-ref' not in _classes(a): return None
+        key = (_get(a, 'href') or '#')[1:]
         if key not in self.fndefs:
             self.warn(f'footnote reference #{key} has no definition; dropped')
             return []
@@ -261,10 +274,6 @@ class Converter:
 
     def fn_blocks(self, li):
         "Footnote body: the li's blocks in footnote-text style, backref stripped, reference mark prepended"
-        li = deepcopy(li)
-        for a in [a for a in li.iter() if etree.QName(a).localname == 'a'
-                  and 'footnote-backref' in (a.get('class') or '')]:
-            a.getparent().remove(a)
         save = self.rels, self._urlrids, self.first
         self.rels, self._urlrids = self.fn_rels, {}   # rel ids are per-part (see fn_relsxml)
         try:
@@ -278,22 +287,20 @@ class Converter:
         blks[0].insert(1, mark)
         return blks
 
-    def image(self, el, fmt):
+    def image(self, el, fmt, alt=None):
         "Embed a local image (dimensions sniffed, width/height px attrs override); remote srcs degrade to a link"
-        src = el.get('src') or ''
-        alt = el.get('alt') or src
+        src = _get(el, 'src') or ''
+        if alt is None: alt = _get(el, 'alt') or src
         if re.match(r'[a-z][a-z0-9+.-]*://', src):
             self.warn(f'remote image not embedded: {src}')
-            fake = E('a', href=src)
-            fake.text = alt
-            return self.link(fake, fmt)
+            return self.external_link(src, self.text_runs(alt, fmt | {'rstyle': _sid('hyperlink')}))
         try: data = (self.base/src).read_bytes()
         except OSError:
             self.warn(f'image not found: {src}; alt text emitted')
             return self.text_runs(alt, fmt)
         pw, ph, dx, dy = imgsize(data) or (300, 200, 96, 96)
         cx, cy = round(pw * 914400 / dx), round(ph * 914400 / dy)
-        w_, h_ = el.get('width'), el.get('height')
+        w_, h_ = _get(el, 'width'), _get(el, 'height')
         if w_: cx = round(float(w_) * EMU_PER_PX)
         if h_: cy = round(float(h_) * EMU_PER_PX)
         if w_ and not h_: cy = round(cx * ph / pw)
@@ -307,7 +314,7 @@ class Converter:
 
     def inline(self, el, fmt):
         "Run-level elements for inline `el` under formatting context `fmt` (dict; copied on change)"
-        tag = etree.QName(el).localname
+        tag = _tag(el)
         if tag == 'em': out = self.runs(el, fmt | {'i': True})
         elif tag == 'strong': out = self.runs(el, fmt | {'b': True})
         elif tag == 'code': out = self.runs(el, fmt | {'rstyle': _sid('codeinline')})
@@ -322,17 +329,27 @@ class Converter:
         elif tag == 'img': out = self.image(el, fmt)
         elif tag == 'br': out = [E('w:r', self.rpr(fmt), E('w:br'))]
         elif tag == 'input':   # task-list checkbox
-            g = '☒' if el.get('checked') else '☐'
+            if _get(el, 'type') != 'checkbox':
+                self.warn(f'unhandled inline <input type={_get(el, "type")!r}>; dropped')
+                return []
+            g = '☒' if _get(el, 'checked') is not None else '☐'
             out = [E('w:r', self.rpr(fmt), E('w:t', g + ' ', {'xml:space': 'preserve'}))]
         elif tag == 'script': out = self.rawxml(el)
+        elif tag in INERT_TAGS: out = []
         else:  # unknown inline (abbr etc): recurse transparently
             out = self.runs(el, fmt)
         return out
 
     def runs(self, el, fmt):
-        "Run-level elements for `el`'s text and children (tails included)"
-        return self.text_runs(el.text or '', fmt) + [
-            r for c in el for r in self.inline(c, fmt) + self.text_runs(c.tail or '', fmt)]
+        "Run-level elements for an element's ordered text and element children"
+        return [r for node in el.children for r in self.inline_node(node, fmt)]
+
+    def inline_node(self, node, fmt):
+        if isinstance(node, Text): return self.text_runs(node.data, fmt)
+        if isinstance(node, Element):
+            if _tag(node) == 'a' and 'footnote-backref' in _classes(node): return []
+            return self.inline(node, fmt)
+        return []
 
     # ---- block level --------------------------------------------------------
     def para(self, runs, style='body', extra=None, sid=None):
@@ -342,17 +359,17 @@ class Converter:
 
     def bookmark(self, el, runs):
         "Wrap `runs` in a bookmark when `el` carries an id (target for internal links)"
-        if not (i := el.get('id')): return runs
+        if not (i := _get(el, 'id')): return runs
         self._bkid += 1
         return [E('w:bookmarkStart', {'w:id': self._bkid, 'w:name': self.bkname(i)}),
                 *runs, E('w:bookmarkEnd', {'w:id': self._bkid})]
 
     def codeblock(self, el):
         "Source Code paragraph, lines joined with w:br; Hl* character styles when a language class names one"
-        code = el[0] if len(el) and etree.QName(el[0]).localname == 'code' else el
-        lang = next((c.removeprefix('language-') for c in (code.get('class') or '').split()
-                     if c.startswith('language-')), None)
-        text = (code.text or '').rstrip('\n')
+        children = _els(el)
+        code = children[0] if children and _tag(children[0]) == 'code' else el
+        lang = next((c.removeprefix('language-') for c in _classes(code) if c.startswith('language-')), None)
+        text = code.to_text().rstrip('\n')
         segs = (segments(text, lang) if self.hlstyles else None) or [(text, None)]
         runs = []
         for txt, scope in segs:
@@ -373,27 +390,24 @@ class Converter:
         "A ul/ol: fresh num instance (so each ordered list restarts), items at level `ilvl`"
         self._numid += 1
         nid = self._numid
-        self.nums.append((nid, 0 if etree.QName(el).localname == 'ul' else 1, int(el.get('start', 1))))
-        return [b for li in el if etree.QName(li).localname == 'li' for b in self.li(li, nid, min(ilvl, 8))]
+        self.nums.append((nid, 0 if _tag(el) == 'ul' else 1, int(_get(el, 'start', 1))))
+        return [b for li in _els(el) if _tag(li) == 'li' for b in self.li(li, nid, min(ilvl, 8))]
 
     def li_parts(self, el):
         "Split mixed li content into ('inline', [nodes]) groups and ('block', child) items, in order"
         parts = []
         def add(x):
-            if isinstance(x, str) and not x.strip() and '\n' in x: return   # list-formatting whitespace
+            if isinstance(x, Text) and not x.data.strip() and '\n' in x.data: return
             if parts and parts[-1][0] == 'inline': parts[-1][1].append(x)
             else: parts.append(('inline', [x]))
-        if el.text: add(el.text)
-        for c in el:
-            if etree.QName(c).localname in BLOCK_TAGS: parts.append(('block', c))
-            else: add(c)
-            if c.tail: add(c.tail)
+        for node in el.children:
+            if isinstance(node, Element) and _tag(node) in BLOCK_TAGS: parts.append(('block', node))
+            elif isinstance(node, (Text, Element)): add(node)
         return parts
 
     def group_runs(self, nodes, fmt):
-        "Runs for a mixed list of text strings and inline elements (tails are separate list entries)"
-        return [r for n in nodes
-                for r in (self.text_runs(n, fmt) if isinstance(n, str) else self.inline(n, fmt))]
+        "Runs for a mixed list of text and inline nodes"
+        return [r for node in nodes for r in self.inline_node(node, fmt)]
 
     def li(self, li, nid, ilvl):
         "Blocks for one list item: the first paragraph carries the number, the rest continue indented"
@@ -402,8 +416,8 @@ class Converter:
         out = []
         for kind, val in self.li_parts(li):
             if kind == 'inline': out.append(self.para(self.group_runs(val, {}), 'list', numpr if not out else cont))
-            elif etree.QName(val).localname in ('ul', 'ol'): out += self.list_el(val, ilvl + 1)
-            elif etree.QName(val).localname == 'p':
+            elif _tag(val) in ('ul', 'ol'): out += self.list_el(val, ilvl + 1)
+            elif _tag(val) == 'p':
                 out.append(self.para(self.runs(val, {}), 'list', numpr if not out else cont))
             else: out += self.block(val, 'list')
         return out or [self.para([], 'list', numpr)]
@@ -421,9 +435,9 @@ class Converter:
                     ci += wd
                 return ci
             ci = _skip(ci)
-            for cell in tr:
-                if etree.QName(cell).localname not in ('td', 'th'): continue
-                cs, rs = int(cell.get('colspan', 1)), int(cell.get('rowspan', 1))
+            for cell in _els(tr):
+                if _tag(cell) not in ('td', 'th'): continue
+                cs, rs = int(_get(cell, 'colspan', 1)), int(_get(cell, 'rowspan', 1))
                 rowcells.append(('cell', ci, cell, cs, rs))
                 for k in range(1, rs): spans[(ri + k, ci)] = cs
                 ci = _skip(ci + cs)
@@ -433,7 +447,7 @@ class Converter:
 
     def col_widths(self, el, ncols):
         "colwidths tracks -> (dxa list, all_fr?) or (None, False) when absent"
-        s = el.get('colwidths') or el.get('data-colwidths')
+        s = _get(el, 'colwidths') or _get(el, 'data-colwidths')
         if not s: return None, False
         tracks = parse_tracks(s)
         if len(tracks) != ncols:
@@ -447,21 +461,21 @@ class Converter:
 
     def cell_blocks(self, cell, header):
         "Block content of one table cell; header cells bold, align attr honored for inline cells"
-        if any(etree.QName(c).localname in BLOCK_TAGS for c in cell): return self.blocks(cell)
-        jc = [E('w:jc', {'w:val': cell.get('align')})] if cell.get('align') in ('center', 'right') else None
+        if any(_tag(c) in BLOCK_TAGS for c in _els(cell)): return self.blocks(cell)
+        jc = [E('w:jc', {'w:val': _get(cell, 'align')})] if _get(cell, 'align') in ('center', 'right') else None
         return [self.para(self.runs(cell, {'b': True} if header else {}), 'compact', jc)]
 
     def table(self, el):
         "w:tbl (+ caption paragraph before, spacer paragraph after)"
         cap = None
         rows, nhead = [], 0
-        for sec in el:
-            t = etree.QName(sec).localname
+        for sec in _els(el):
+            t = _tag(sec)
             if t == 'caption': cap = sec
             elif t == 'thead':
-                rows += list(sec)
+                rows += _els(sec)
                 nhead = len(rows)
-            elif t in ('tbody', 'tfoot'): rows += list(sec)
+            elif t in ('tbody', 'tfoot'): rows += _els(sec)
             elif t == 'tr': rows.append(sec)
         placed, ncols = self.table_grid(rows)
         dxa, all_fr = self.col_widths(el, ncols)
@@ -503,11 +517,11 @@ class Converter:
         """Numbered caption paragraph: 'Label N: text' with a SEQ field as N. When `el` has an id, the
         label+number span is bookmarked under it (REF target) and the number alone under `<name>_n`.
         Emitted whenever there is a caption or an id; the label word comes from reftypes[typ]."""
-        if capel is None and not el.get('id'): return []
+        if capel is None and not _get(el, 'id'): return []
         label = self.reftypes[typ][0]
         seq = [E('w:fldSimple', {'w:instr': rf' SEQ {label} \* ARABIC '}, E('w:r', self.rpr(fmt), E('w:t', '#')))]
         self.has_fields = True
-        if i := el.get('id'):
+        if i := _get(el, 'id'):
             nm = self.bkname(i)
             self._bknames[i + '\0n'] = nm + '_n'   # reserve the number-only name too
             self._bkid += 2
@@ -524,9 +538,10 @@ class Converter:
 
     def figure(self, el):
         "Figure: image paragraph, then its numbered caption paragraph below (Word convention)"
-        img = next((c for c in el.iter() if etree.QName(c).localname == 'img'), None)
-        capel = next((c for c in el if etree.QName(c).localname == 'figcaption'), None)
-        out = [] if img is None else [self.para(self.image(img, {}), 'body')]
+        img = next((c for c in _walk(el) if _tag(c) == 'img'), None)
+        capel = next((c for c in _els(el) if _tag(c) == 'figcaption'), None)
+        alt = capel.to_text().strip() if capel is not None else None
+        out = [] if img is None else [self.para(self.image(img, {}, alt), 'body')]
         return out + self.caption_para(el, 'fig', capel)
 
     # Paragraphs directly after these blocks (or at document start) take First Paragraph rather
@@ -536,13 +551,13 @@ class Converter:
     def block(self, el, style='body', sid=None):
         "Block elements for `el` (one element may yield several); `sid` is a custom-style id override for paragraphs"
         out = self._block(el, style, sid)
-        tag = etree.QName(el).localname
-        if tag in self.FIRST_AFTER or (tag == 'div' and 'display' in (el.get('class') or '')):
+        tag = _tag(el)
+        if tag in self.FIRST_AFTER or (tag == 'div' and 'display' in _classes(el)):
             self.first = True
         return out
 
     def _block(self, el, style, sid):
-        tag = etree.QName(el).localname
+        tag = _tag(el)
         if tag == 'p':
             ex = self.qindent() if style == 'blockquote' else None
             psid = self.custom_style(el, 'paragraph') or sid
@@ -564,12 +579,13 @@ class Converter:
         if tag == 'dl': return self.dl(el)
         if tag == 'script': return self.rawxml(el)
         if tag == 'figure': return self.figure(el)
+        if tag == 'template': return []
         if tag == 'div':
-            cls = (el.get('class') or '').split()
+            cls = _classes(el)
             if 'math' in cls and 'display' in cls:
                 return [E('w:p', E('m:oMathPara', self.omath(el)))]
             return self.blocks(el, style, self.custom_style(el, 'paragraph') or sid)
-        if tag in BLOCK_TAGS and any(etree.QName(c).localname in BLOCK_TAGS for c in el):
+        if tag in BLOCK_TAGS and any(_tag(c) in BLOCK_TAGS for c in _els(el)):
             return self.blocks(el, style, sid)   # unknown container: recurse
         self.warn(f'unhandled block <{tag}>; emitted as plain paragraph')
         return [self.para(self.runs(el, {}), style, None, sid)]
@@ -578,25 +594,54 @@ class Converter:
 
     def rawxml(self, el):
         "Elements parsed from a raw docx payload (`{=docx}` in Markdown); other formats skip silently"
-        if el.get('type') != 'text/x-docx': return []
-        try: return list(etree.fromstring(f'<x2d {self.RAWNS}>{el.text or ""}</x2d>'))
+        if _get(el, 'type') != 'application/vnd.mdhtml.raw' or _get(el, 'data-format') != 'docx': return []
+        payload, warn = decode_raw(el)
+        if warn:
+            self.warn(warn)
+            return []
+        try: return list(etree.fromstring(f'<m2d {self.RAWNS}>{payload}</m2d>'))
         except etree.XMLSyntaxError as e:
-            self.warn(f'malformed text/x-docx payload: {e}')
+            self.warn(f'malformed docx raw payload: {e}')
             return []
 
     def dl(self, el):
         "Definition list: dt/dd paragraphs in their dialect styles"
         out = []
-        for c in el:
-            t = etree.QName(c).localname
+        for c in _els(el):
+            t = _tag(c)
             if t == 'dt': out.append(self.para(self.runs(c, {}), 'dt'))
             elif t == 'dd':
-                blocky = any(etree.QName(k).localname in BLOCK_TAGS for k in c)
+                blocky = any(_tag(k) in BLOCK_TAGS for k in _els(c))
                 out += self.blocks(c, 'dd') if blocky else [self.para(self.runs(c, {}), 'dd')]
         return out
 
-    def blocks(self, parent, style='body', sid=None):
-        return [b for el in parent for b in self.block(el, style, sid)]
+    def blocks(self, parent, style='body', sid=None): return self.block_nodes(parent.children, style, sid)
+
+    def block_nodes(self, nodes, style='body', sid=None):
+        out, inline = [], []
+        def flush():
+            meaningful = [n for n in inline if not isinstance(n, Text) or n.data.strip()]
+            if not meaningful:
+                inline.clear()
+                return
+            raw = all(isinstance(n, Element) and _is_raw(n) for n in meaningful)
+            if raw:
+                for node in meaningful: out.extend(self.block(node, style, sid))
+            else:
+                extra = self.qindent() if style == 'blockquote' else None
+                use = 'firstpara' if self.first and style == 'body' and not sid else style
+                self.first = False
+                out.append(self.para(self.group_runs(inline, {}), use, extra, sid))
+            inline.clear()
+        for node in nodes:
+            if isinstance(node, Comment): continue
+            if isinstance(node, Element) and (_tag(node) in INERT_TAGS or _tag(node) == 'script' and not _is_raw(node)): continue
+            if isinstance(node, Element) and _tag(node) in BLOCK_TAGS:
+                flush()
+                out.extend(self.block(node, style, sid))
+            elif isinstance(node, (Text, Element)): inline.append(node)
+        flush()
+        return out
 
     # ---- assembly -----------------------------------------------------------
     def document(self, body_blocks):
@@ -722,24 +767,25 @@ class Converter:
         "Split out footnote endnote sections, indexing their li definitions by id; returns body elements"
         body, fn = [], []
         for el in els:
-            (fn if etree.QName(el).localname == 'section' and 'footnotes' in (el.get('class') or '') else body).append(el)
-        self.fndefs.update({li.get('id'): li for sec in fn for li in sec.iter()
-                            if etree.QName(li).localname == 'li' and li.get('id')})
+            is_notes = isinstance(el, Element) and _tag(el) == 'section' and 'footnotes' in _classes(el)
+            (fn if is_notes else body).append(el)
+        self.fndefs.update({_get(li, 'id'): li for sec in fn for li in _walk(sec) if _tag(li) == 'li' and _get(li, 'id')})
         return body
 
     BOOKMARKABLE = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}
 
-    def to_docx(self, xhtml, dest):
-        els = self.harvest_footnotes(parse_frag(xhtml))
+    def to_docx(self, mdhtml, dest):
+        root = parse_frag(mdhtml)
+        nodes = self.harvest_footnotes(root.children)
         self.idtext, self.reftarget = {}, {}
-        for e in (e for el in els for e in el.iter()):
-            if not (i := e.get('id')): continue
-            self.idtext[i] = ' '.join(''.join(e.itertext()).split())
-            t = etree.QName(e).localname
+        for e in (e for node in nodes if isinstance(node, Element) for e in _walk(node)):
+            if not (i := _get(e, 'id')): continue
+            self.idtext[i] = ' '.join(e.to_text().split())
+            t = _tag(e)
             if t in ('figure', 'table'): self.reftarget[i] = 'caption'
             elif t in self.BOOKMARKABLE: self.reftarget[i] = 'block'
         self.ids = set(self.idtext)
-        blocks = [b for el in els for b in self.block(el)]
+        blocks = self.block_nodes(nodes)
         docxml = self.document(blocks)
         parts = {}   # archive name -> (bytes, content-type kind); each also gets a document rel
         if self.nums or self.headnum or self.xnums:
@@ -777,8 +823,8 @@ class Converter:
         root.insert(pos, E('w:updateFields', {'w:val': 'true'}))
         return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
-def convert(xhtml, dest, reference=None, base=None, reftypes=None, number_headings=None):
-    """Convert an xhtmlmd XHTML fragment to a docx file at `dest`; returns a list of warnings.
+def convert(mdhtml, dest, reference=None, base=None, reftypes=None, number_headings=None):
+    """Convert an MDHTML string or mutable DocumentFragment to a docx file at `dest`; returns warnings.
     `reference` is a reference docx path, or a list of them: the first supplies the whole archive
     (default, or when None: the built-in template), later entries contribute styles only, later-wins -
     each a .docx path, a raw styles/numbering .xml path, or a fastpylight theme name (whose Hl*/Source
@@ -788,4 +834,4 @@ def convert(xhtml, dest, reference=None, base=None, reftypes=None, number_headin
     live REF fields; `reftypes` maps type tokens to (singular, plural) prefix words beyond the built-in
     `sec`, and `number_headings` (a styles.SCHEMES name such as 'legal', or a {lvlText: numFmt} dict, one entry per heading level)
     numbers the headings via a multilevel list so `\\w` fields resolve."""
-    return Converter(reference, base, reftypes, number_headings).to_docx(xhtml, dest)
+    return Converter(reference, base, reftypes, number_headings).to_docx(mdhtml, dest)

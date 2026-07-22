@@ -1,7 +1,7 @@
 import re, zipfile
 from pathlib import Path
 
-from xhtml2docx.validate import fast_checks
+from mdhtml2docx.validate import fast_checks
 
 GOOD = Path(__file__).parent/'fixtures'/'good.docx'
 

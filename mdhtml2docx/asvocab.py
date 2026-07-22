@@ -7,7 +7,7 @@ from lxml import etree
 
 __all__ = ['vocab', 'props', 'sd', 'sdfind']
 
-SDEF = files('xhtml2docx')/'word.sdef'
+SDEF = files('mdhtml2docx')/'word.sdef'
 _kinds = {b'p': 'property', b'e': 'element', b'c': 'command'}
 
 def vocab(app, pat=''):

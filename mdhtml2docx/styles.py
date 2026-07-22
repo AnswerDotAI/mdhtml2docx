@@ -1,5 +1,6 @@
 "Style names and the reference template. STYLE_MAP is the single source of truth: the template defines exactly these styles, the converter emits exactly these names, and tests close the loop."
 from importlib.resources import files
+from mdhtml.export import SCHEMES
 
 __all__ = ['STYLE_MAP', 'style_id', 'ref_path', 'theme_styles', 'theme_ref']
 
@@ -13,13 +14,8 @@ def style_id(name):
     "Word style id for style `name`: title-cased, spaces dropped ('Body Text' -> 'BodyText', 'heading 1' -> 'Heading1')"
     return name.title().replace(' ', '')
 
-def ref_path(): return files('xhtml2docx')/'templates'/'reference.docx'
+def ref_path(): return files('mdhtml2docx')/'templates'/'reference.docx'
 
-# Heading numbering schemes for number_headings=: {lvlText: numFmt}, one entry per level, padded with decimals
-SCHEMES = dict(
-    legal={'%1.': 'decimal', '(%2)': 'lowerLetter', '(%3)': 'lowerRoman',
-           '(%4)': 'upperLetter', '(%5)': 'upperRoman', '(%6)': 'decimal'},
-    decimal={'.'.join(f'%{j}' for j in range(1, i + 2)): 'decimal' for i in range(6)})
 
 
 # Word underline values for fastpylight/Lumis underline styles
