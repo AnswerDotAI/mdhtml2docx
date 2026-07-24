@@ -18,7 +18,7 @@ def w(tag): return f'{{{W}}}{tag}'
 # Styles the seed defines that we keep as Word authored them (plus linked Char twins, which
 # w:link references require). Everything else the seed defines is dropped.
 KEEP = {'Normal', 'DefaultParagraphFont', 'TableNormal', 'NoList', 'Quote', 'QuoteChar', 'ListParagraph',
-        *[f'Heading{n}' for n in range(1, 7)], *[f'Heading{n}Char' for n in range(1, 7)]}
+    *[f'Heading{n}' for n in range(1, 7)], *[f'Heading{n}Char' for n in range(1, 7)]}
 
 # Styles Word keeps latent (definitions live inside Word, absent from the file), authored here.
 # Built-in names are canonical (lowercase for heading/caption/footnote families); custom ones marked so.
@@ -82,6 +82,10 @@ NEW_STYLES = r'''<w:styles xmlns:w="http://schemas.openxmlformats.org/wordproces
     <w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/>
   </w:tblBorders></w:tblPr>
 </w:style>
+<w:style w:type="table" w:styleId="BorderlessTable">
+  <w:name w:val="Borderless Table"/><w:basedOn w:val="TableNormal"/><w:uiPriority w:val="40"/>
+  <w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>
+</w:style>
 </w:styles>'''
 
 def build_styles(xml):
@@ -103,7 +107,7 @@ def scrub_props(xml):
     "Replace personal creator/lastModifiedBy in docProps/core.xml"
     root = etree.fromstring(xml)
     for tag in ('{http://purl.org/dc/elements/1.1/}creator',
-                '{http://schemas.openxmlformats.org/package/2006/metadata/core-properties}lastModifiedBy'):
+        '{http://schemas.openxmlformats.org/package/2006/metadata/core-properties}lastModifiedBy'):
         e = root.find(tag)
         if e is not None: e.text = 'mdhtml2docx'
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)

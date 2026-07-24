@@ -107,4 +107,4 @@ DRAWING = r'''<w:drawing xmlns:w="{W}" xmlns:wp="{WP}" xmlns:a="{A}" xmlns:pic="
 def drawing(rid, n, cx, cy, descr=''):
     "A w:drawing (inline picture) element: relationship `rid`, unique docPr id `n`, extent in EMU"
     return etree.fromstring(DRAWING.format(W=W, WP=WP, A=A, P=PIC, R=R, rid=rid, n=n, cx=cx, cy=cy,
-                                           descr=escape(descr, {'"': '&quot;'})))
+        descr=escape(descr, {'"': '&quot;'})))

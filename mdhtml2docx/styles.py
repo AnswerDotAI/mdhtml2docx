@@ -1,10 +1,9 @@
-"Style names and the reference template. STYLE_MAP is the single source of truth: the template defines exactly these styles, the converter emits exactly these names, and tests close the loop."
+"Style names and the reference template. STYLE_MAP is the single source of truth for converter-emitted styles: the template defines them all, the converter emits exactly these names, and tests close the loop. The template also carries author-selectable extras (`Borderless Table`), reached only via `custom-style`/class."
 from importlib.resources import files
-from mdhtml.export import SCHEMES
 
 __all__ = ['STYLE_MAP', 'style_id', 'ref_path', 'theme_styles', 'theme_ref']
 
-STYLE_MAP = dict(
+STYLE_MAP = dict(  # chkstyle: ignore-node
     body='Body Text', firstpara='First Paragraph', blockquote='Quote', codeblock='Source Code', codeinline='Verbatim Char',
     h1='heading 1', h2='heading 2', h3='heading 3', h4='heading 4', h5='heading 5', h6='heading 6',
     compact='Compact', hyperlink='Hyperlink', list='List Paragraph', dt='Definition Term', dd='Definition',
@@ -32,24 +31,24 @@ def theme_styles(theme):
     tc = theme_colors(theme)
     nrm = tc.pop('normal', {})
     def rpr(st):
-        return E('w:rPr', E('w:b') if st['bold'] else None, E('w:i') if st['italic'] else None,
-                 E('w:strike') if st['strikethrough'] else None,
-                 E('w:color', {'w:val': _hx(st['fg'])}) if st['fg'] else None,
-                 E('w:u', {'w:val': _ULINE[st['underline']]}) if st['underline'] else None,
-                 E('w:shd', {'w:val': 'clear', 'w:color': 'auto', 'w:fill': _hx(st['bg'])}) if st['bg'] else None)
+        return E('w:rPr', E('w:b') if st['bold'] else None, E('w:i') if st['italic'] else None,  # chkstyle: ignore-node
+            E('w:strike') if st['strikethrough'] else None,
+            E('w:color', {'w:val': _hx(st['fg'])}) if st['fg'] else None,
+            E('w:u', {'w:val': _ULINE[st['underline']]}) if st['underline'] else None,
+            E('w:shd', {'w:val': 'clear', 'w:color': 'auto', 'w:fill': _hx(st['bg'])}) if st['bg'] else None)
     def sty(scope, st):
         name = ('hl ' + scope.replace('.', ' ')).title()
         return E('w:style', {'w:type': 'character', 'w:customStyle': 1, 'w:styleId': style_id(name)},
-                 E('w:name', {'w:val': name}), E('w:basedOn', {'w:val': 'DefaultParagraphFont'}), rpr(st))
+            E('w:name', {'w:val': name}), E('w:basedOn', {'w:val': 'DefaultParagraphFont'}), rpr(st))
     mono = {'w:ascii': 'Consolas', 'w:hAnsi': 'Consolas', 'w:cs': 'Consolas'}
     sc = E('w:style', {'w:type': 'paragraph', 'w:styleId': 'SourceCode'},
-           E('w:name', {'w:val': 'Source Code'}), E('w:basedOn', {'w:val': 'Normal'}),
-           E('w:next', {'w:val': 'FirstParagraph'}), E('w:uiPriority', {'w:val': 1}), E('w:qFormat'),
-           E('w:pPr', E('w:keepLines'), E('w:spacing', {'w:before': 120, 'w:after': 120}),
-             E('w:shd', {'w:val': 'clear', 'w:color': 'auto', 'w:fill': _hx(nrm.get('bg') or '#F5F5F5')})),
-           E('w:rPr', E('w:rFonts', mono),
-             E('w:color', {'w:val': _hx(nrm['fg'])}) if nrm.get('fg') else None,
-             E('w:sz', {'w:val': 20}), E('w:szCs', {'w:val': 20})))
+        E('w:name', {'w:val': 'Source Code'}), E('w:basedOn', {'w:val': 'Normal'}),
+        E('w:next', {'w:val': 'FirstParagraph'}), E('w:uiPriority', {'w:val': 1}), E('w:qFormat'),
+        E('w:pPr', E('w:keepLines'), E('w:spacing', {'w:before': 120, 'w:after': 120}),
+            E('w:shd', {'w:val': 'clear', 'w:color': 'auto', 'w:fill': _hx(nrm.get('bg') or '#F5F5F5')})),
+        E('w:rPr', E('w:rFonts', mono),
+            E('w:color', {'w:val': _hx(nrm['fg'])}) if nrm.get('fg') else None,
+            E('w:sz', {'w:val': 20}), E('w:szCs', {'w:val': 20})))
     return [sc] + [sty(s, st) for s, st in sorted(tc.items())]
 
 _CT = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

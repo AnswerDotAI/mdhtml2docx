@@ -2,9 +2,11 @@
 from functools import cache
 from pathlib import Path
 from appscript import app, k, mactypes
-import Quartz, subprocess, time
+import Quartz, time
+from Foundation import NSURL
 
-__all__ = ['TIMEOUT', 'UI_TIMEOUT', 'word', 'new_doc', 'open_doc', 'set_text', 'doc_text', 'save_docx', 'save_pdf', 'close_doc', 'win_id', 'win_pic', 'word_proc', 'dlg_read', 'dlg_click', 'dismiss_dlgs', 'check_docx']
+
+__all__ = ['TIMEOUT', 'UI_TIMEOUT', 'word', 'new_doc', 'open_doc', 'set_text', 'doc_text', 'save_docx', 'save_pdf', 'close_doc', 'win_id', 'win2png', 'win_pic', 'word_proc', 'dlg_read', 'dlg_click', 'dismiss_dlgs', 'check_docx']
 
 TIMEOUT = 15  # default seconds for every AppleEvent; Word blocked on a modal is the failure this bounds
 UI_TIMEOUT = 3  # System Events UI queries answer near-instantly or never; this bounds the never
@@ -61,11 +63,22 @@ def win_id():
     if not ids: raise ValueError('No Microsoft Word window on screen')
     return ids[0]
 
-def win_pic(path, timeout=None):
-    "Capture Word's document window (occluded is fine) to png at `path`, returning it"
+def win2png(wid, path):
+    "Capture the window with CGWindow id `wid` (occluded is fine; off-Space windows are not capturable) to png at `path`, returning it"
+    # CGWindowListCreateImage is deprecated (successor: ScreenCaptureKit, async/delegate API) but works through macOS 26
+    img = Quartz.CGWindowListCreateImage(Quartz.CGRectNull, Quartz.kCGWindowListOptionIncludingWindow, wid, Quartz.kCGWindowImageBoundsIgnoreFraming)
+    if img is None or Quartz.CGImageGetWidth(img) <= 1: raise ValueError(f'could not capture window {wid} (gone, or Screen Recording not permitted)')
     p = Path(path).expanduser().resolve()
-    subprocess.run(['screencapture', '-o', '-x', f'-l{win_id()}', str(p)], check=True, timeout=timeout or TIMEOUT)
+    dst = Quartz.CGImageDestinationCreateWithURL(NSURL.fileURLWithPath_(str(p)), 'public.png', 1, None)
+    Quartz.CGImageDestinationAddImage(dst, img, None)
+    if not Quartz.CGImageDestinationFinalize(dst): raise ValueError(f'could not write png to {p}')
     return p
+
+
+
+def win_pic(path):
+    "Capture Word's document window (occluded is fine) to png at `path`, returning it"
+    return win2png(win_id(), path)
 
 @cache
 def word_proc():
@@ -108,8 +121,7 @@ def check_docx(path, timeout=10):
     p = Path(path).expanduser().resolve()
     before = {_val(n) for n in (word().documents.name.get(timeout=TIMEOUT) or []) if _val(n)}
     try: d = open_doc(p, timeout=timeout)
-    except Exception:
-        return 'corrupt', dismiss_dlgs()
+    except Exception: return 'corrupt', dismiss_dlgs()
     names = {_val(n) for n in (word().documents.name.get(timeout=TIMEOUT) or []) if _val(n)}
     if p.name in names:
         txt = doc_text(d)

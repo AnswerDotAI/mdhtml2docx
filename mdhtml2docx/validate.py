@@ -22,8 +22,7 @@ def mce_strip(root):
     for e in root.iter():
         for a in list(e.attrib):
             if a.startswith('{') and bad(a[1:a.index('}')]): del e.attrib[a]
-    for e in [e for e in root.iter() if isinstance(e.tag, str) and bad(etree.QName(e).namespace or '')]:
-        e.getparent().remove(e)
+    for e in [e for e in root.iter() if isinstance(e.tag, str) and bad(etree.QName(e).namespace or '')]: e.getparent().remove(e)
     return root
 
 def fast_checks(path):

@@ -4,22 +4,22 @@ from pathlib import Path
 from fastcore.test import test_eq as teq, test as tt, test_fail as tfail
 from fastcore.utils import in_
 
-from mdhtml import parse_mdhtml, sample_md, to_mdhtml
-from mdhtml2docx.convert import convert
+from mdhtml import JINJA, MUSTACHE, mustache_kind, parse_mdhtml, sample_md, to_mdhtml
+from mdhtml2docx.convert import convert, jinja_literal, mustache_fields
 from mdhtml2docx.validate import fast_checks
 
 
 def pandoc(path, to='markdown'):
     "Read `path` back through pandoc's independent docx reader"
     r = subprocess.run(['pandoc', '-f', 'docx', '-t', to, '--wrap=none', str(path)],
-                       capture_output=True, text=True, check=True)
+        capture_output=True, text=True, check=True)
     return r.stdout
 
 
 def test_skeleton(tmp_path):
     out = tmp_path/'t.docx'
     convert('<p>Hello <em>world</em> with <strong>bold</strong> and <strong><em>both</em></strong>.</p>\n'
-            '<p>Second para.</p>', out)
+        '<p>Second para.</p>', out)
     teq(fast_checks(out), 'valid')
     md = pandoc(out)
     tt('Hello *world* with **bold** and ***both***.', md, in_)
@@ -55,7 +55,7 @@ def test_basic_blocks(tmp_path):
     teq(fast_checks(out), 'valid')
     md = pandoc(out)
     for s in ('# Title', '## Sub *title*', '`f(x)`', '[fast.ai](https://fast.ai/)',
-              '> Quoted line.', 'def f(x):', 'return x'): tt(s, md, in_)
+        '> Quoted line.', 'def f(x):', 'return x'): tt(s, md, in_)
     # pandoc resolves the anchor against the heading bookmark and rewrites it to the heading's
     # auto-identifier, so this line proves the internal link wiring survived the round trip
     tt('[the title](#title)', md, in_)
@@ -74,7 +74,7 @@ def test_lists(tmp_path):
     teq(fast_checks(out), 'valid')
     lines = [' '.join(l.split()) for l in pandoc(out).splitlines()]
     for s in ('- one', '- deep', '1. first', '2. second',
-              '5. fifth'): tt(s, lines, in_)   # 5: start attr honored; restart proves per-list numbering
+        '5. fifth'): tt(s, lines, in_)   # 5: start attr honored; restart proves per-list numbering
     # pandoc's reader recognizes the ballot-box glyphs and reconstructs markdown task items
     tt('- [x] done', lines, in_)
     tt('- [ ] todo', lines, in_)
@@ -99,9 +99,9 @@ def test_tables(tmp_path):
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     # 10em -> 2200 twips; 2fr/1fr share the remaining 7160 of the template's 9360 content width
     for s in ('<w:gridCol w:w="2200"/>', '<w:gridCol w:w="4773"/>', '<w:gridCol w:w="2387"/>',
-              '<w:tblHeader/>',           # thead row repeats across pages
-              'w:val="restart"',          # rowspan opened
-              '<w:gridSpan w:val="2"/>'): tt(s, doc, in_)   # colspan encoded
+        '<w:tblHeader/>',           # thead row repeats across pages
+        'w:val="restart"',          # rowspan opened
+        '<w:gridSpan w:val="2"/>'): tt(s, doc, in_)   # colspan encoded
 
 
 def test_more_features(tmp_path):
@@ -123,6 +123,7 @@ def test_more_features(tmp_path):
     teq(warns, ["custom style 'Fancy' not in reference doc; stub injected"])
     teq(fast_checks(out), 'valid')
     md = pandoc(out)
+<<<<<<< Updated upstream
     for s in ('H~2~O', 'E=mc^2^', '~~gone~~', 'hot', '[under]{.underline}', 'term', 'definition here',
               '![tiny pic](media/', '[^1]', 'The note text',
               'Math: $', r'b\hat{}2$', r'mc\hat{}2$$'): tt(s, md, in_)   # zones read back as pandoc math
@@ -131,6 +132,16 @@ def test_more_features(tmp_path):
     for s in ('<w:pBdr>', '<w:u w:val="single"/>',                            # hr
               'w:val="DefinitionTerm"', 'w:val="Definition"',
               'cx="38100" cy="19050"'): tt(s, doc, in_)   # 4x2 px at 96dpi in EMU
+=======
+    for s in ('H~2~O', 'E=mc^2^', '~~gone~~', 'hot', 'term', 'definition here',
+        '![tiny pic](media/', '[^1]', 'The note text',
+        'Math: $', r'b\hat{}2$', r'mc\hat{}2$$'): tt(s, md, in_)   # zones read back as pandoc math
+    assert '↩' not in md            # backref stripped: the endnote became a real footnote
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    for s in ('<w:pBdr>',                            # hr
+        'w:val="DefinitionTerm"', 'w:val="Definition"',
+        'cx="38100" cy="19050"'): tt(s, doc, in_)   # 4x2 px at 96dpi in EMU
+>>>>>>> Stashed changes
     styles = zipfile.ZipFile(out).read('word/styles.xml').decode()
     tt('w:val="Fancy"', styles, in_)                 # stub injected into the archive
 
@@ -154,7 +165,7 @@ def test_imgsize():
 def test_math(tmp_path):
     out = tmp_path/'t.docx'
     warns = convert('<p>Euler: <span class="math inline">e^{i\\pi} + 1 = 0</span> inline.</p>\n'
-                    '<div class="math display">E = mc^2</div>', out)
+        '<div class="math display">E = mc^2</div>', out)
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
@@ -172,14 +183,14 @@ def test_sample(tmp_path):
     out = tmp_path/'sample.docx'
     warns = convert(to_mdhtml(sample_md(), smart=True, auto_ids=True, implicit_figures=True), out, number_headings='legal')
     teq(warns, ['remote image not embedded: https://dummyimage.com/96x48/eeeeee/333333.png&text=demo',
-                'remote image not embedded: https://dummyimage.com/96x48/eeeeee/333333.png&text=fig'])
+        'remote image not embedded: https://dummyimage.com/96x48/eeeeee/333333.png&text=fig'])
     teq(fast_checks(out), 'valid')
     W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
     z = zipfile.ZipFile(out)
     used = set()
     for part in ('word/document.xml', 'word/footnotes.xml'):
         used |= {e.get(f'{{{W}}}val') for e in etree.fromstring(z.read(part)).iter()
-                 if etree.QName(e).localname in ('pStyle', 'rStyle', 'tblStyle')}
+            if etree.QName(e).localname in ('pStyle', 'rStyle', 'tblStyle')}
     defined = {s.get(f'{{{W}}}styleId') for s in etree.fromstring(z.read('word/styles.xml')).iter(f'{{{W}}}style')}
     assert used <= defined, f'undefined styles referenced: {used - defined}'
     hl = {u for u in used if u.startswith('Hl')}
@@ -187,19 +198,19 @@ def test_sample(tmp_path):
     teq(used - hl, {style_id(v) for v in STYLE_MAP.values()})
     doc = z.read('word/document.xml').decode()
     for s in (r'REF sec_late \w \h', r'REF sec_payment \w \h', r'PAGEREF sec_late \h',
-              r'REF fig_diagram \h', r'REF tbl_stages_n \h', ' SEQ Figure ', ' SEQ Table ',
-              '<w:br w:type="page"/>', 'Delivery stages', '“'): tt(s, doc, in_)
+        r'REF fig_diagram \h', r'REF tbl_stages_n \h', ' SEQ Figure ', ' SEQ Table ',
+        '<w:br w:type="page"/>', 'Delivery stages', '“'): tt(s, doc, in_)
     tt('updateFields', z.read('word/settings.xml').decode(), in_)
     md = pandoc(out)
     for s in ('# mdhtml feature sample', '###### Week one', 'Temperature 1961-1990', '-89.2',
-              r'mc\hat{}2$$', '[^1]:', 'A Markdown parser that renders MDHTML fragments.'): tt(s, md, in_)
+        r'mc\hat{}2$$', '[^1]:', 'A Markdown parser that renders MDHTML fragments.'): tt(s, md, in_)
 
 
 def test_code_highlight(tmp_path):
     "fastpylight scopes: language-classed blocks get Hl* character styles from the theme ref; text still round-trips"
     out = tmp_path/'t.docx'
     warns = convert('<pre><code class="language-python">def f(x):\n    return "hi"\n</code></pre>\n'
-                    '<pre><code>no language here</code></pre>', out)
+        '<pre><code>no language here</code></pre>', out)
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
@@ -288,14 +299,14 @@ def test_xrefs(tmp_path):
     teq(fast_checks(out), 'valid')
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     for s in (r'REF sec_pay \w \h', r'REF sec_intro \w \h', r'PAGEREF sec_pay \h',
-              'Section ', 'Sections ', 'Clause ', ' and ', 'Payment terms'): tt(s, doc, in_)
+        'Section ', 'Sections ', 'Clause ', ' and ', 'Payment terms'): tt(s, doc, in_)
     num = zipfile.ZipFile(out).read('word/numbering.xml').decode()
     for s in ('lowerLetter', '(%2)', 'Heading1'): tt(s, num, in_)
     tt('updateFields', zipfile.ZipFile(out).read('word/settings.xml').decode(), in_)
     tt('w:numPr', zipfile.ZipFile(out).read('word/styles.xml').decode(), in_)
     tfail(lambda: convert('<p><a href="#nope" data-ref=""></a></p>', out), contains='#nope')
     tfail(lambda: convert('<p id="z-a"><a href="#z-a" data-ref=""></a></p>', out),
-              contains="reference type 'z'")
+        contains="reference type 'z'")
     tfail(lambda: convert('<p><a href="#sec-pay" data-ref="page text"></a></p>', out), contains='conflicting data-ref')
 
 
@@ -305,7 +316,7 @@ def test_xrefs_numbered_reference_doc(tmp_path):
     convert('<h1 id="a">A</h1>', ref, number_headings='legal')
     out = tmp_path/'t.docx'
     warns = convert('<h1 id="sec-a">A</h1>\n<ul>\n<li>one</li>\n</ul>\n'
-                    '<p>See <a href="#sec-a" data-ref=""></a>.</p>', out, reference=ref)
+        '<p>See <a href="#sec-a" data-ref=""></a>.</p>', out, reference=ref)
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     num = zipfile.ZipFile(out).read('word/numbering.xml').decode()
@@ -317,7 +328,7 @@ def test_xrefs_numbered_reference_doc(tmp_path):
 def test_xml_contributor(tmp_path):
     "A raw styles .xml reference entry contributes styles and numbering"
     xml = tmp_path/'extra.xml'
-    xml.write_text(
+    xml.write_text(  # chkstyle: ignore-node
         '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
         '<w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="multilevel"/>'
         '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="upperRoman"/>'
@@ -328,7 +339,7 @@ def test_xml_contributor(tmp_path):
         '</w:style></w:styles>')
     out = tmp_path/'t.docx'
     warns = convert('<p custom-style="Fancy">Hi</p>\n<ul>\n<li>one</li>\n</ul>', out,
-                    reference=[None, xml])
+        reference=[None, xml])
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     num = zipfile.ZipFile(out).read('word/numbering.xml').decode()
@@ -351,8 +362,7 @@ def test_caption_refs(tmp_path):
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
-    for s in (' SEQ Figure ', ' SEQ Table ', r'REF fig_plot \h', r'REF tbl_r_n \h',
-              'Results ', 'A plot'): tt(s, doc, in_)
+    for s in (' SEQ Figure ', ' SEQ Table ', r'REF fig_plot \h', r'REF tbl_r_n \h', 'Results ', 'A plot'): tt(s, doc, in_)
     tt('descr="A plot"', doc, in_)
     assert 'Figures' not in doc                  # mixed group: per-item singular prefixes
     assert r'REF fig_plot \w' not in doc         # caption targets never use \w
@@ -360,4 +370,63 @@ def test_caption_refs(tmp_path):
     tt('A plot', md, in_)
     # a ref to an id that never becomes a bookmark is an error, not a dud field
     tfail(lambda: convert('<div id="d-x"><p>hi</p></div><p><a href="#d-x" data-ref=""></a></p>', out),
-          contains='#d-x')
+        contains='#d-x')
+
+
+def test_template_tokens(tmp_path):
+    out = tmp_path/'t.docx'
+    src = to_mdhtml('Pay {{sal}} to {{name}}.\n\n{{#opt}}\n\nGranted.\n\n{{/opt}}\n', templates=MUSTACHE)
+    convert(src, out)                                    # default: tokens dropped, as before
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    assert 'sal' not in doc and '{{' not in doc
+    warns = convert(src, out, tmpl=mustache_fields)
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    assert 'MERGEFIELD sal' in doc and 'MERGEFIELD name' in doc
+    assert '{{#opt}}' in doc and '{{/opt}}' in doc       # section markers stay literal, own paragraphs
+    teq(warns, [])
+    teq(fast_checks(out), 'valid')
+    convert(to_mdhtml('V {{ v }}.\n\n{% if x %}\n', templates=JINJA), out, tmpl=jinja_literal)
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    assert '{{ v }}' in doc and '{% if x %}' in doc
+    teq(fast_checks(out), 'valid')
+
+def test_table_custom_style(tmp_path):
+    out = tmp_path/'t.docx'
+    convert(to_mdhtml('| A |\n|---|\n| b |\n{: custom-style="Borderless Table"}\n\n| C |\n|---|\n| d |\n'), out)
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    tt('<w:tblStyle w:val="BorderlessTable"/>', doc, in_)          # styled table picks the reference style
+    tt('<w:tblStyle w:val="TableGrid"/>', doc, in_)                # plain table keeps the default
+    teq(fast_checks(out), 'valid')
+
+
+
+
+def test_template_controls(tmp_path):
+    def controls(body, syntax, form):
+        if mustache_kind(body) == 'section': return None
+        return 'control', body
+    out = tmp_path/'t.docx'
+    convert(to_mdhtml('Pay {{sal}} to {{name}}.\n\n{{#opt}}\n', templates=MUSTACHE), out, tmpl=controls)
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    assert doc.count('<w:sdt>') == 2 and 'w:val="sal"' in doc and 'w:val="name"' in doc
+    assert doc.count('<w:showingPlcHdr/>') == 2 and 'w:val="PlaceholderText"' in doc
+    styles = zipfile.ZipFile(out).read('word/styles.xml').decode()
+    assert 'w:styleId="PlaceholderText"' in styles and 'w:val="808080"' in styles
+    assert '{{' not in doc                                   # section marker dropped by this callable
+    teq(fast_checks(out), 'valid')
+
+
+def test_template_bound(tmp_path):
+    def bound(body, syntax, form):
+        if mustache_kind(body) == 'section': return None
+        return 'bound', body
+    out = tmp_path/'t.docx'
+    convert(to_mdhtml('Pay {{sal}} to {{sal}} and {{name}}.\n', templates=MUSTACHE), out, tmpl=bound)
+    z = zipfile.ZipFile(out)
+    doc = z.read('word/document.xml').decode()
+    assert doc.count('<w:dataBinding ') == 3 and doc.count('/ns0:fields[1]/ns0:sal[1]') == 2
+    cx = z.read('customXml/item1.xml').decode()
+    assert cx.count('<ns0:sal/>') == 1 and '<ns0:name/>' in cx   # deduped inventory, one element per variable
+    assert 'customXmlProperties' in z.read('[Content_Types].xml').decode()
+    assert 'customXml' in z.read('word/_rels/document.xml.rels').decode()
+    teq(fast_checks(out), 'valid')

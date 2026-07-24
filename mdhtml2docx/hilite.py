@@ -4,7 +4,7 @@ package keeps its lxml-only hard dependency. Colors live in the reference doc's 
 styles (see styles.theme_styles); this module only tokenizes."""
 
 # theme_colors is probed too: a pre-theme_colors fastpylight is treated as absent, not half-working
-try: from fastpylight import tokenize, theme_colors
+try: from fastpylight import tokenize, theme_colors  # chkstyle: ignore
 except ImportError: tokenize = None
 
 __all__ = ['segments']
