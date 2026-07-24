@@ -1,7 +1,11 @@
 <!-- do not remove -->
 
-## Unreleased
+## 0.1.0
 
-- Renamed the package from `xhtml2docx` to `mdhtml2docx`.
-- Parse input with mdhtml's JustHTML DOM and accept mutable `DocumentFragment` values.
+### New Features
+
+- Migrate from JustHTML to fast5ever, using isinstance node checks and direct attrs access ([#5](https://github.com/AnswerDotAI/mdhtml2docx/issues/5))
+- Rename to mdhtml2docx and switch input from xhtmlmd XHTML to mdhtml JustHTML DOM with support for raw-data encodings, reference tokens/groups, HTML5 repair, inert templates, and figcaption alt text ([#2](https://github.com/AnswerDotAI/mdhtml2docx/issues/2))
+- Add xhtml2docx conversion engine, WML helpers, style management, validation, Word scripting, and syntax highlighting modules ([#1](https://github.com/AnswerDotAI/mdhtml2docx/issues/1))
 - Support MDHTML raw-data encodings, reference tokens and groups, HTML5 body repair, inert templates, and figure accessibility text from `figcaption`.
+
