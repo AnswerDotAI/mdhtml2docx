@@ -154,6 +154,7 @@ class Converter:
         if fmt.get('i'): kids += [E('w:i'), E('w:iCs')]
         if fmt.get('strike'): kids.append(E('w:strike'))
         if fmt.get('mark'): kids.append(E('w:highlight', {'w:val': 'yellow'}))
+        if fmt.get('u'): kids.append(E('w:u', {'w:val': 'single'}))
         if v := fmt.get('vert'): kids.append(E('w:vertAlign', {'w:val': v}))
         return E('w:rPr', *kids) if kids else None
 
@@ -321,6 +322,7 @@ class Converter:
         elif tag == 'a': out = self.link(el, fmt)
         elif tag == 'del': out = self.runs(el, fmt | {'strike': True})
         elif tag == 'mark': out = self.runs(el, fmt | {'mark': True})
+        elif tag == 'u': out = self.runs(el, fmt | {'u': True})
         elif tag == 'sub': out = self.runs(el, fmt | {'vert': 'subscript'})
         elif tag == 'sup':
             fn = self.fnref(el, fmt)
@@ -491,7 +493,8 @@ class Converter:
                   E('w:tblLayout', {'w:type': 'fixed'}) if dxa and not all_fr else None,
                   E('w:tblLook', {'w:val': '04A0', 'w:firstRow': 1, 'w:lastRow': 0,
                                   'w:firstColumn': 0, 'w:lastColumn': 0, 'w:noHBand': 0, 'w:noVBand': 1}))
-        grid = E('w:tblGrid', *[E('w:gridCol', {'w:w': dxa[i]} if dxa else None) for i in range(ncols)])
+        gw = dxa or [self.content_w // ncols] * ncols   # pandoc's docx reader drops tables whose gridCols lack w:w
+        grid = E('w:tblGrid', *[E('w:gridCol', {'w:w': gw[i]}) for i in range(ncols)])
         trs = []
         for ri, rowcells in enumerate(placed):
             tcs = []
