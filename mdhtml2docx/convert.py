@@ -7,7 +7,7 @@ style we emit."""
 import posixpath, re, zipfile
 from copy import deepcopy
 from pathlib import Path
-from justhtml import Comment, DocumentFragment, Element, Text
+from fast5ever import Comment, Element, Node, Text
 from lxml import etree
 from mdhtml import parse_mdhtml
 from mdhtml.export import REFTYPES, SCHEMES, decode_raw, group_plan, mustache_kind, ref_tokens, ref_variant
@@ -36,8 +36,8 @@ def _is_raw(el): return _tag(el) == 'script' and _get(el, 'type') == 'applicatio
 
 def parse_frag(src):
     "Parse an MDHTML body fragment, or return an existing mutable fragment"
-    if isinstance(src, DocumentFragment): return src
-    if not isinstance(src, str): raise TypeError('input must be an MDHTML string or DocumentFragment')
+    if isinstance(src, Node): return src
+    if not isinstance(src, str): raise TypeError('input must be an MDHTML string or fast5ever node')
     return parse_mdhtml(src)
 
 class Converter:
@@ -347,7 +347,7 @@ class Converter:
         return [r for node in el.children for r in self.inline_node(node, fmt)]
 
     def inline_node(self, node, fmt):
-        if isinstance(node, Text): return self.text_runs(node.data, fmt)
+        if isinstance(node, Text): return self.text_runs(node.text, fmt)
         if isinstance(node, Element):
             if _tag(node) == 'a' and 'footnote-backref' in _classes(node): return []
             return self.inline(node, fmt)
@@ -399,7 +399,7 @@ class Converter:
         "Split mixed li content into ('inline', [nodes]) groups and ('block', child) items, in order"
         parts = []
         def add(x):
-            if isinstance(x, Text) and not x.data.strip() and '\n' in x.data: return
+            if isinstance(x, Text) and not x.text.strip() and '\n' in x.text: return
             if parts and parts[-1][0] == 'inline': parts[-1][1].append(x)
             else: parts.append(('inline', [x]))
         for node in el.children:
@@ -485,17 +485,6 @@ class Converter:
             wd = sum(dxa[ci:ci + cs])
             if all_fr: return E('w:tcW', {'w:type': 'pct', 'w:w': round(wd / self.content_w * 5000)})
             return E('w:tcW', {'w:type': 'dxa', 'w:w': wd})
-<<<<<<< Updated upstream
-        tblw = (E('w:tblW', {'w:type': 'auto', 'w:w': 0}) if not dxa
-                else E('w:tblW', {'w:type': 'pct', 'w:w': 5000}) if all_fr
-                else E('w:tblW', {'w:type': 'dxa', 'w:w': sum(dxa)}))
-        tblpr = E('w:tblPr', E('w:tblStyle', {'w:val': _sid('table')}), tblw,
-                  E('w:tblLayout', {'w:type': 'fixed'}) if dxa and not all_fr else None,
-                  E('w:tblLook', {'w:val': '04A0', 'w:firstRow': 1, 'w:lastRow': 0,
-                                  'w:firstColumn': 0, 'w:lastColumn': 0, 'w:noHBand': 0, 'w:noVBand': 1}))
-        gw = dxa or [self.content_w // ncols] * ncols   # pandoc's docx reader drops tables whose gridCols lack w:w
-        grid = E('w:tblGrid', *[E('w:gridCol', {'w:w': gw[i]}) for i in range(ncols)])
-=======
         tblw = (E('w:tblW', {'w:type': 'auto', 'w:w': 0}) if not dxa  # chkstyle: ignore-node
             else E('w:tblW', {'w:type': 'pct', 'w:w': 5000}) if all_fr
             else E('w:tblW', {'w:type': 'dxa', 'w:w': sum(dxa)}))
@@ -503,8 +492,8 @@ class Converter:
             E('w:tblLayout', {'w:type': 'fixed'}) if dxa and not all_fr else None,
             E('w:tblLook', {'w:val': '04A0', 'w:firstRow': 1, 'w:lastRow': 0,
                 'w:firstColumn': 0, 'w:lastColumn': 0, 'w:noHBand': 0, 'w:noVBand': 1}))
-        grid = E('w:tblGrid', *[E('w:gridCol', {'w:w': dxa[i]} if dxa else None) for i in range(ncols)])
->>>>>>> Stashed changes
+        gw = dxa or [self.content_w // ncols] * ncols   # pandoc's docx reader drops tables whose gridCols lack w:w
+        grid = E('w:tblGrid', *[E('w:gridCol', {'w:w': gw[i]}) for i in range(ncols)])
         trs = []
         for ri, rowcells in enumerate(placed):
             tcs = []
@@ -656,7 +645,7 @@ class Converter:
     def block_nodes(self, nodes, style='body', sid=None):
         out, inline = [], []
         def flush():
-            meaningful = [n for n in inline if not isinstance(n, Text) or n.data.strip()]
+            meaningful = [n for n in inline if not isinstance(n, Text) or n.text.strip()]
             if not meaningful:
                 inline.clear()
                 return
@@ -912,7 +901,7 @@ def jinja_literal(body, syntax, form):
 
 
 def convert(mdhtml, dest, reference=None, base=None, reftypes=None, number_headings=None, tmpl=None):
-    """Convert an MDHTML string or mutable DocumentFragment to a docx file at `dest`; returns warnings.
+    """Convert an MDHTML string or mutable fast5ever DOM to a docx file at `dest`; returns warnings.
     `reference` is a reference docx path, or a list of them: the first supplies the whole archive
     (default, or when None: the built-in template), later entries contribute styles only, later-wins -
     each a .docx path, a raw styles/numbering .xml path, or a fastpylight theme name (whose Hl*/Source

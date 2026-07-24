@@ -2,7 +2,7 @@
 
 ## Input and output trees
 
-`convert` accepts an MDHTML string or an existing JustHTML `DocumentFragment`. Strings are parsed once by `mdhtml.parse_mdhtml`. Converter code reads JustHTML `Element`, `Text`, and `Comment` nodes in document order; it does not project them into an XML tree.
+`convert` accepts an MDHTML string or an existing fast5ever node. Strings are parsed once by `mdhtml.parse_mdhtml`. Converter code walks fast5ever's element, text, and comment nodes in document order; it does not project them into an XML tree.
 
 lxml remains the output library. It builds WordprocessingML parts, reads the reference archive's XML, and validates the resulting docx. Keeping the input and output types distinct prevents XML name, comment, namespace, and well-formedness rules from leaking into MDHTML handling.
 

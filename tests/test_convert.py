@@ -123,25 +123,14 @@ def test_more_features(tmp_path):
     teq(warns, ["custom style 'Fancy' not in reference doc; stub injected"])
     teq(fast_checks(out), 'valid')
     md = pandoc(out)
-<<<<<<< Updated upstream
     for s in ('H~2~O', 'E=mc^2^', '~~gone~~', 'hot', '[under]{.underline}', 'term', 'definition here',
-              '![tiny pic](media/', '[^1]', 'The note text',
-              'Math: $', r'b\hat{}2$', r'mc\hat{}2$$'): tt(s, md, in_)   # zones read back as pandoc math
-    assert '↩' not in md            # backref stripped: the endnote became a real footnote
-    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
-    for s in ('<w:pBdr>', '<w:u w:val="single"/>',                            # hr
-              'w:val="DefinitionTerm"', 'w:val="Definition"',
-              'cx="38100" cy="19050"'): tt(s, doc, in_)   # 4x2 px at 96dpi in EMU
-=======
-    for s in ('H~2~O', 'E=mc^2^', '~~gone~~', 'hot', 'term', 'definition here',
         '![tiny pic](media/', '[^1]', 'The note text',
         'Math: $', r'b\hat{}2$', r'mc\hat{}2$$'): tt(s, md, in_)   # zones read back as pandoc math
     assert '↩' not in md            # backref stripped: the endnote became a real footnote
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
-    for s in ('<w:pBdr>',                            # hr
+    for s in ('<w:pBdr>', '<w:u w:val="single"/>',                            # hr
         'w:val="DefinitionTerm"', 'w:val="Definition"',
         'cx="38100" cy="19050"'): tt(s, doc, in_)   # 4x2 px at 96dpi in EMU
->>>>>>> Stashed changes
     styles = zipfile.ZipFile(out).read('word/styles.xml').decode()
     tt('w:val="Fancy"', styles, in_)                 # stub injected into the archive
 

@@ -5,17 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mdhtml2docx"
 dynamic = ["version"]
-description = "A Python package"
+description = "Convert MDHTML to Word docx files"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
-authors = [{ name = "mdhtml2docx contributors" }]
+authors = [{ name = "Jeremy Howard", email = "j@fast.ai" }]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = ["lxml", "mdhtml>=0.1.13", "justhtml>=3.9.0"]
+dependencies = ["lxml", "mdhtml>=0.1.15", "fast5ever>=0.1.1"]
 
 [project.optional-dependencies]
 dev = [

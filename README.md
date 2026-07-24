@@ -2,7 +2,7 @@
 
 Convert [MDHTML](https://github.com/AnswerDotAI/mdhtml) to Word docx files.
 
-`mdhtml` renders Markdown to an HTML5 document format shared by format-specific exporters. This package converts its portable core to docx from scratch. It uses JustHTML's mutable WHATWG DOM for input and lxml for the generated WordprocessingML.
+`mdhtml` renders Markdown to an HTML5 document format shared by format-specific exporters. This package converts its portable core to docx from scratch. It uses [fast5ever](https://github.com/AnswerDotAI/fast5ever)'s mutable WHATWG DOM for input and lxml for the generated WordprocessingML.
 
 MDHTML accepts the full HTML vocabulary. This exporter supports the portable elements and annotations listed below. It preserves the text of unknown inline elements, recurses through block containers, and warns when an unsupported block must become a plain paragraph. HTML parsing and repair belong to `mdhtml`; this package only walks the resulting tree.
 
@@ -16,7 +16,7 @@ html = to_mdhtml(markdown_text)
 warnings = convert(html, 'out.docx')
 ```
 
-`convert` takes an MDHTML string, writes a docx, and returns a list of warning strings. It parses strings with `mdhtml.parse_mdhtml`, so normal HTML5 repair applies and XML well-formedness is irrelevant. It also accepts an existing mutable JustHTML `DocumentFragment`:
+`convert` takes an MDHTML string, writes a docx, and returns a list of warning strings. It parses strings with `mdhtml.parse_mdhtml`, so normal HTML5 repair applies and XML well-formedness is irrelevant. It also accepts an existing mutable fast5ever DOM:
 
 ```python
 from mdhtml import parse_mdhtml
