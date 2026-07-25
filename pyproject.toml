@@ -40,5 +40,6 @@ include = ["mdhtml2docx"]
 mdhtml2docx = ["schemas/*", "templates/*", "word.sdef"]
 
 [tool.pytest.ini_options]
-markers = ["slow: needs live GUI apps or long runtimes; deselected by default"]
-addopts = "-m 'not slow'"
+markers = ["slow: needs live GUI apps or long runtimes; deselected by default",
+    "checkout: needs the mdhtml source tree (examples/sample.md), not just the wheel; deselected by default"]
+addopts = "-m 'not slow and not checkout'"

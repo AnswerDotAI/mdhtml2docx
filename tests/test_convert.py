@@ -1,10 +1,11 @@
-import base64, subprocess, zipfile
+import base64, pytest, subprocess, zipfile
 from pathlib import Path
 
 from fastcore.test import test_eq as teq, test as tt, test_fail as tfail
 from fastcore.utils import in_
 
-from mdhtml import JINJA, MUSTACHE, mustache_kind, parse_mdhtml, sample_md, to_mdhtml
+from mdhtml import JINJA, MUSTACHE, mustache_kind, parse_mdhtml, to_mdhtml
+from mdhtml.tools import SAMPLE_MD, sample_md
 from mdhtml2docx.convert import convert, jinja_literal, mustache_fields
 from mdhtml2docx.validate import fast_checks
 
@@ -165,14 +166,14 @@ def test_math(tmp_path):
     tt('E = mc^2', doc, in_)
 
 
+@pytest.mark.checkout
 def test_sample(tmp_path):
     "The loop-closer: mdhtml's packaged sample -> docx (smart, legally numbered); every emitted style resolves"
     from lxml import etree
     from mdhtml2docx.styles import STYLE_MAP, style_id
     out = tmp_path/'sample.docx'
-    warns = convert(to_mdhtml(sample_md(), smart=True, auto_ids=True, implicit_figures=True), out, number_headings='legal')
-    teq(warns, ['remote image not embedded: https://dummyimage.com/96x48/eeeeee/333333.png&text=demo',
-        'remote image not embedded: https://dummyimage.com/96x48/eeeeee/333333.png&text=fig'])
+    warns = convert(to_mdhtml(sample_md(), smart=True, auto_ids=True, implicit_figures=True), out, base=SAMPLE_MD.parent, number_headings='legal')
+    teq(warns, [])
     teq(fast_checks(out), 'valid')
     W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
     z = zipfile.ZipFile(out)
