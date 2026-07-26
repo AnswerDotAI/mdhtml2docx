@@ -582,6 +582,9 @@ class Converter:
         if tag == 'div':
             cls = _classes(el)
             if 'math' in cls and 'display' in cls: return [E('w:p', E('m:oMathPara', self.omath(el)))]
+            if 'details' in cls and (kids := _els(el)) and _tag(kids[0]) in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+                label = self.para(self.runs(kids[0], {'b': True}), style)   # the dialect's collapsible block: label as a bold line, never a numbered heading
+                return [label, *self.block_nodes(kids[1:], style, sid)]
             return self.blocks(el, style, self.custom_style(el, 'paragraph') or sid)
         if tag in BLOCK_TAGS and any(_tag(c) in BLOCK_TAGS for c in _els(el)):
             return self.blocks(el, style, sid)   # unknown container: recurse

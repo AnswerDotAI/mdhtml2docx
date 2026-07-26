@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 
-from mdhtml import to_mdhtml
+from mdhtml import DASHES, replacements, to_mdhtml
 from mdhtml.tools import SAMPLE_MD, sample_md
 from mdhtml2docx import convert
 
@@ -12,6 +12,6 @@ pytestmark = [pytest.mark.slow, pytest.mark.checkout]
 
 def test_sample():
     docx = DATA/'sample.docx'
-    warns = convert(to_mdhtml(sample_md(), smart=True, auto_ids=True, implicit_figures=True), docx, base=SAMPLE_MD.parent, number_headings='legal')
+    warns = convert(to_mdhtml(sample_md(), callbacks={'text': replacements(*DASHES)}, implicit_figures=True), docx, base=SAMPLE_MD.parent, number_headings='legal')
     assert not warns
     assert docx.stat().st_size

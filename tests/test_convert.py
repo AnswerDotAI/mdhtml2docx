@@ -4,7 +4,7 @@ from pathlib import Path
 from fastcore.test import test_eq as teq, test as tt, test_fail as tfail
 from fastcore.utils import in_
 
-from mdhtml import JINJA, MUSTACHE, mustache_kind, parse_mdhtml, to_mdhtml
+from mdhtml import DASHES, JINJA, MUSTACHE, replacements, mustache_kind, parse_mdhtml, to_mdhtml
 from mdhtml.tools import SAMPLE_MD, sample_md
 from mdhtml2docx.convert import convert, jinja_literal, mustache_fields
 from mdhtml2docx.validate import fast_checks
@@ -28,6 +28,13 @@ def test_skeleton(tmp_path):
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     # pandoc-compatible First Paragraph convention: doc-start paragraph, then Body Text
     assert doc.index('w:val="FirstParagraph"') < doc.index('w:val="BodyText"')
+
+
+def test_dash_replacements(tmp_path):
+    out = tmp_path/'t.docx'
+    convert(to_mdhtml('scores 3--5 -- nice... `a--b`', callbacks={'text': replacements(*DASHES)}), out)
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    for s in ('3–5', ' – nice… ', 'a--b'): tt(s, doc, in_)
 
 
 def test_html5_fragment_and_mutable_dom_input(tmp_path):
@@ -172,7 +179,7 @@ def test_sample(tmp_path):
     from lxml import etree
     from mdhtml2docx.styles import STYLE_MAP, style_id
     out = tmp_path/'sample.docx'
-    warns = convert(to_mdhtml(sample_md(), smart=True, auto_ids=True, implicit_figures=True), out, base=SAMPLE_MD.parent, number_headings='legal')
+    warns = convert(to_mdhtml(sample_md(), callbacks={'text': replacements(*DASHES)}, implicit_figures=True), out, base=SAMPLE_MD.parent, number_headings='legal')
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
@@ -189,7 +196,7 @@ def test_sample(tmp_path):
     doc = z.read('word/document.xml').decode()
     for s in (r'REF sec_late \w \h', r'REF sec_payment \w \h', r'PAGEREF sec_late \h',
         r'REF fig_diagram \h', r'REF tbl_stages_n \h', ' SEQ Figure ', ' SEQ Table ',
-        '<w:br w:type="page"/>', 'Delivery stages', '“'): tt(s, doc, in_)
+        '<w:br w:type="page"/>', 'Delivery stages'): tt(s, doc, in_)
     tt('updateFields', z.read('word/settings.xml').decode(), in_)
     md = pandoc(out)
     for s in ('# mdhtml feature sample', '###### Week one', 'Temperature 1961-1990', '-89.2',
@@ -420,3 +427,13 @@ def test_template_bound(tmp_path):
     assert 'customXmlProperties' in z.read('[Content_Types].xml').decode()
     assert 'customXml' in z.read('word/_rels/document.xml.rels').decode()
     teq(fast_checks(out), 'valid')
+
+
+def test_details_degrades_to_bold_label(tmp_path):
+    out = tmp_path/'t.docx'
+    warns = convert(to_mdhtml('::: {.details .tool-usage-details}\n## the label\n\nbody text\n:::\n'), out)
+    assert not warns
+    md = pandoc(out)
+    tt('**the label**', md, in_)
+    tt('body text', md, in_)
+    assert '# the label' not in md   # label is a bold line, not a heading
