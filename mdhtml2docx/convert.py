@@ -10,14 +10,15 @@ from pathlib import Path
 from fast5ever import Comment, Element, Node, Text
 from lxml import etree
 from mdhtml import parse_mdhtml
-from mdhtml.export import REFTYPES, SCHEMES, decode_raw, group_plan, mustache_kind, ref_tokens, ref_variant
+from mdhtml.export import REFTYPES, SCHEMES, decode_raw, group_plan, ref_tokens, ref_variant
+from mdhtml.mustache import mustache_kind
 from .styles import STYLE_MAP, style_id, theme_styles
 from .styles import ref_path as _refpath
 from .wml import *
 from .wml import qn
 from .hilite import segments, tokenize
 
-__all__ = ['convert', 'mustache_fields', 'jinja_literal']
+__all__ = ['convert', 'mustache_fields']
 
 def _sid(key): return style_id(STYLE_MAP[key])
 
@@ -897,11 +898,6 @@ def mustache_fields(body, syntax, form):
     return 'field', f'MERGEFIELD {body.strip()}'
 
 
-def jinja_literal(body, syntax, form):
-    "Jinja tokens re-spelled canonically (`{{ x }}`/`{% x %}`) as text, for docxtpl-style downstream pipelines"
-    o, c = ('{%', '%}') if syntax == 'jinja-stmt' else ('{{', '}}')
-    return f'{o} {body.strip()} {c}'
-
 
 def convert(mdhtml, dest, reference=None, base=None, reftypes=None, number_headings=None, tmpl=None):
     """Convert an MDHTML string or mutable fast5ever DOM to a docx file at `dest`; returns warnings.
@@ -917,6 +913,6 @@ def convert(mdhtml, dest, reference=None, base=None, reftypes=None, number_headi
     unless `tmpl` is given: a callable `(body, syntax, form) -> str` for a literal text run,
     `('field', instr)` for a live field, `('control', name)` for an interactive plain-text content
     control, `('bound', name)` for a content control data-bound to a shared per-variable XML node
-    (same-name controls stay in sync as one is filled), or None to drop - `mustache_fields` and
-    `jinja_literal` are ready-made recipes."""
+    (same-name controls stay in sync as one is filled), or None to drop - `mustache_fields` here
+    and `mdhtml.jinja.jinja_literal` are ready-made recipes."""
     return Converter(reference, base, reftypes, number_headings, tmpl).to_docx(mdhtml, dest)

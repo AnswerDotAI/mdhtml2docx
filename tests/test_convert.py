@@ -4,9 +4,11 @@ from pathlib import Path
 from fastcore.test import test_eq as teq, test as tt, test_fail as tfail
 from fastcore.utils import in_
 
-from mdhtml import DASHES, JINJA, MUSTACHE, replacements, mustache_kind, parse_mdhtml, to_mdhtml
+from mdhtml import DASHES, replacements, parse_mdhtml, to_mdhtml
+from mdhtml.jinja import JINJA, jinja_literal
+from mdhtml.mustache import MUSTACHE, mustache_kind
 from mdhtml.tools import SAMPLE_MD, sample_md
-from mdhtml2docx.convert import convert, jinja_literal, mustache_fields
+from mdhtml2docx.convert import convert, mustache_fields
 from mdhtml2docx.validate import fast_checks
 
 
