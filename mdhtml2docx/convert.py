@@ -10,8 +10,7 @@ from pathlib import Path
 from fast5ever import Comment, Element, Node, Text
 from lxml import etree
 from mdhtml import parse_mdhtml
-from mdhtml.export import REFTYPES, SCHEMES, decode_raw, group_plan, ref_tokens, ref_variant
-from mdhtml.mustache import mustache_kind
+from mdhtml.export import REFTYPES, SCHEMES, decode_raw, tmpl_node, group_plan, ref_tokens, ref_variant
 from .styles import STYLE_MAP, style_id, theme_styles
 from .styles import ref_path as _refpath
 from .wml import *
@@ -470,15 +469,20 @@ class Converter:
     def table(self, el):
         "w:tbl (+ caption paragraph before, spacer paragraph after)"
         cap = None
-        rows, nhead = [], 0
+        rows, nhead, markers = [], 0, {}
+        def _add(c):
+            "Rows in order; template markers recorded at the row index they precede"
+            if _tag(c) == 'template': markers.setdefault(len(rows), []).append(c)
+            else: rows.append(c)
         for sec in _els(el):
             t = _tag(sec)
             if t == 'caption': cap = sec
             elif t == 'thead':
-                rows += _els(sec)
+                for c in _els(sec): _add(c)
                 nhead = len(rows)
-            elif t in ('tbody', 'tfoot'): rows += _els(sec)
-            elif t == 'tr': rows.append(sec)
+            elif t in ('tbody', 'tfoot'):
+                for c in _els(sec): _add(c)
+            elif t in ('tr', 'template'): _add(sec)
         placed, ncols = self.table_grid(rows)
         dxa, all_fr = self.col_widths(el, ncols)
         def _tcw(ci, cs):
@@ -495,8 +499,13 @@ class Converter:
                 'w:firstColumn': 0, 'w:lastColumn': 0, 'w:noHBand': 0, 'w:noVBand': 1}))
         gw = dxa or [self.content_w // ncols] * ncols   # pandoc's docx reader drops tables whose gridCols lack w:w
         grid = E('w:tblGrid', *[E('w:gridCol', {'w:w': gw[i]}) for i in range(ncols)])
+        def _marker_tr(mel):
+            "A range marker between rows: one full-width literal cell, so forms keep their markers visible"
+            tcpr = E('w:tcPr', _tcw(0, ncols), E('w:gridSpan', {'w:val': ncols}) if ncols > 1 else None)
+            return E('w:tr', E('w:tc', tcpr, self.para(self.tmpl_runs(mel, {}, 'row'))))
         trs = []
         for ri, rowcells in enumerate(placed):
+            for mel in markers.get(ri, []): trs.append(_marker_tr(mel))
             tcs = []
             for item in rowcells:
                 if item[0] == 'cont':
@@ -513,6 +522,7 @@ class Converter:
                     if not len(body) or etree.QName(body[-1]).localname != 'p': body.append(E('w:p'))
                     tcs.append(E('w:tc', tcpr, *body))
             trs.append(E('w:tr', E('w:trPr', E('w:tblHeader')) if ri < nhead else None, *tcs))
+        for mel in markers.get(len(rows), []): trs.append(_marker_tr(mel))
         out = self.caption_para(el, 'tbl', cap)
         return out + [E('w:tbl', tblpr, grid, *trs), E('w:p')]
 
@@ -598,16 +608,21 @@ class Converter:
     BIND_ID = '{8E2C9A44-7D31-4E5B-9C0D-1A6F2B3C4D5E}'   # fixed datastore id, so builds are reproducible
 
     def tmpl_runs(self, el, fmt, form):
-        """Template-token runs via the `tmpl` callable: str is a literal text run, ('field', instr) a live
-        field, ('control', name) an interactive plain-text content control, None dropped"""
+        """Template-token runs. Range markers and unknown tokens are converter policy: literal
+        `«body»` runs, so an unfilled form shows its markers. Var tokens go through the `tmpl`
+        callable with the token node dict (see `mdhtml.export.tmpl_node`): str is a literal text
+        run, ('field', instr) a live field, ('control', name) an interactive plain-text content
+        control, ('bound', name) a data-bound one, None dropped"""
+        node = tmpl_node(el, form)
+        if node["kind"] != "var": return self.text_runs(f'«{node["body"].strip()}»', fmt)
         if self.tmpl is None: return []
-        res = self.tmpl(el.to_text(), _get(el, 'data-template', ''), form)
+        res = self.tmpl(node)
         if res is None: return []
         if isinstance(res, str): return self.text_runs(res, fmt)
         kind, val = res
         if kind == 'field':
             self.has_fields = True
-            return [E('w:fldSimple', {'w:instr': f' {val.strip()} '}, E('w:r', self.rpr(fmt), E('w:t', f'«{el.to_text().strip()}»')))]
+            return [E('w:fldSimple', {'w:instr': f' {val.strip()} '}, E('w:r', self.rpr(fmt), E('w:t', f'«{node["name"]}»')))]
         if kind in ('control', 'bound'):
             self.has_controls = True
             sdtpr = E('w:sdtPr', E('w:alias', {'w:val': val}), E('w:tag', {'w:val': val}), E('w:showingPlcHdr'))
@@ -892,10 +907,9 @@ class Converter:
         root.insert(pos, E('w:updateFields', {'w:val': 'true'}))
         return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
-def mustache_fields(body, syntax, form):
-    "Mustache variables as live Word `MERGEFIELD`s; section markers (`#`/`/`/`^` sigils) stay literal text"
-    if mustache_kind(body) == 'section': return '{{' + body + '}}'
-    return 'field', f'MERGEFIELD {body.strip()}'
+def mustache_fields(node):
+    "Template variables as live Word `MERGEFIELD`s (markers never reach `tmpl`: the converter shows them literally)"
+    return 'field', f'MERGEFIELD {node["name"]}'
 
 
 
@@ -910,9 +924,10 @@ def convert(mdhtml, dest, reference=None, base=None, reftypes=None, number_headi
     live REF fields; `reftypes` maps type tokens to (singular, plural) prefix words beyond the built-in
     `sec`, and `number_headings` (a styles.SCHEMES name such as 'legal', or a {lvlText: numFmt} dict, one entry per heading level)
     numbers the headings via a multilevel list so `\\w` fields resolve. Template tokens are dropped
-    unless `tmpl` is given: a callable `(body, syntax, form) -> str` for a literal text run,
+    unless `tmpl` is given: a callable taking the token node dict (`mdhtml.export.tmpl_node`: `body`,
+    `syntax`, `form`, `kind`, `name`, `inverted`) and returning a str for a literal text run,
     `('field', instr)` for a live field, `('control', name)` for an interactive plain-text content
     control, `('bound', name)` for a content control data-bound to a shared per-variable XML node
-    (same-name controls stay in sync as one is filled), or None to drop - `mustache_fields` here
-    and `mdhtml.jinja.jinja_literal` are ready-made recipes."""
+    (same-name controls stay in sync as one is filled), or None to drop; range markers never reach `tmpl` and render as literal «body» runs - `mustache_fields` here
+    is the ready-made recipe."""
     return Converter(reference, base, reftypes, number_headings, tmpl).to_docx(mdhtml, dest)

@@ -5,8 +5,7 @@ from fastcore.test import test_eq as teq, test as tt, test_fail as tfail
 from fastcore.utils import in_
 
 from mdhtml import DASHES, replacements, parse_mdhtml, to_mdhtml
-from mdhtml.jinja import JINJA, jinja_literal
-from mdhtml.mustache import MUSTACHE, mustache_kind
+from mdhtml.mustache import MUSTACHE
 from mdhtml.tools import SAMPLE_MD, sample_md
 from mdhtml2docx.convert import convert, mustache_fields
 from mdhtml2docx.validate import fast_checks
@@ -375,18 +374,14 @@ def test_caption_refs(tmp_path):
 def test_template_tokens(tmp_path):
     out = tmp_path/'t.docx'
     src = to_mdhtml('Pay {{sal}} to {{name}}.\n\n{{#opt}}\n\nGranted.\n\n{{/opt}}\n', templates=MUSTACHE)
-    convert(src, out)                                    # default: tokens dropped, as before
+    convert(src, out)                                    # default: vars dropped, markers literal
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
-    assert 'sal' not in doc and '{{' not in doc
+    assert 'sal' not in doc and '{{' not in doc and '«#opt»' in doc   # vars dropped; markers stay visible
     warns = convert(src, out, tmpl=mustache_fields)
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     assert 'MERGEFIELD sal' in doc and 'MERGEFIELD name' in doc
-    assert '{{#opt}}' in doc and '{{/opt}}' in doc       # section markers stay literal, own paragraphs
+    assert '«#opt»' in doc and '«/opt»' in doc          # markers: converter-rendered literals, own paragraphs
     teq(warns, [])
-    teq(fast_checks(out), 'valid')
-    convert(to_mdhtml('V {{ v }}.\n\n{% if x %}\n', templates=JINJA), out, tmpl=jinja_literal)
-    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
-    assert '{{ v }}' in doc and '{% if x %}' in doc
     teq(fast_checks(out), 'valid')
 
 def test_table_custom_style(tmp_path):
@@ -401,9 +396,7 @@ def test_table_custom_style(tmp_path):
 
 
 def test_template_controls(tmp_path):
-    def controls(body, syntax, form):
-        if mustache_kind(body) == 'section': return None
-        return 'control', body
+    def controls(node): return 'control', node['name']
     out = tmp_path/'t.docx'
     convert(to_mdhtml('Pay {{sal}} to {{name}}.\n\n{{#opt}}\n', templates=MUSTACHE), out, tmpl=controls)
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
@@ -411,14 +404,12 @@ def test_template_controls(tmp_path):
     assert doc.count('<w:showingPlcHdr/>') == 2 and 'w:val="PlaceholderText"' in doc
     styles = zipfile.ZipFile(out).read('word/styles.xml').decode()
     assert 'w:styleId="PlaceholderText"' in styles and 'w:val="808080"' in styles
-    assert '{{' not in doc                                   # section marker dropped by this callable
+    assert '«#opt»' in doc                                # marker: converter-rendered literal
     teq(fast_checks(out), 'valid')
 
 
 def test_template_bound(tmp_path):
-    def bound(body, syntax, form):
-        if mustache_kind(body) == 'section': return None
-        return 'bound', body
+    def bound(node): return 'bound', node['name']
     out = tmp_path/'t.docx'
     convert(to_mdhtml('Pay {{sal}} to {{sal}} and {{name}}.\n', templates=MUSTACHE), out, tmpl=bound)
     z = zipfile.ZipFile(out)
