@@ -207,12 +207,12 @@ class Converter:
 
     def ref_fld(self, el, fmt):
         """REF/PAGEREF field for a cross-reference `a`, with a cached placeholder Word replaces on update.
-        Heading/paragraph targets number via `\\w`; caption targets return their bookmarked 'Label N' text
+        Heading, paragraph, and span targets number via `\\w`; caption targets return their bookmarked 'Label N' text
         (or the number-only `_n` bookmark for bare/leaf/rel refs), so `\\w` never applies to them."""
         tgt = (_get(el, 'href') or '#')[1:]
         tokens = ref_tokens(_get(el, 'data-ref'))
         if tgt not in self.reftarget:
-            raise ValueError(f'cross-reference target #{tgt} not found (targets are headings, paragraphs, figures, and tables with ids)')
+            raise ValueError(f'cross-reference target #{tgt} not found (targets are headings, paragraphs, spans, figures, and tables with ids)')
         kind = ref_variant(tokens)
         nm, self.has_fields = self.bkname(tgt), True
         if kind == 'page': instr, cached = rf' PAGEREF {nm} \h ', '#'
@@ -247,11 +247,11 @@ class Converter:
         return next((self.refstyles[c.lower()] for c in _classes(el) if c.lower() in self.refstyles), None)
 
     def span(self, el, fmt):
-        "Inline span: math -> inline m:oMath zone (linear source, dialect-agnostic), custom style -> rStyle, else transparent"
+        "Inline span: math -> inline m:oMath zone (linear source, dialect-agnostic), custom style -> rStyle, else transparent; an id becomes a bookmark (REF target)"
         if _get(el, 'data-refs') is not None: return self.ref_group(el, fmt)
         if 'math' in _classes(el): return [self.omath(el)]
-        if sid := self.custom_style(el, 'character'): return self.runs(el, fmt | {'rstyle': sid})
-        return self.runs(el, fmt)
+        if sid := self.custom_style(el, 'character'): return self.bookmark(el, self.runs(el, fmt | {'rstyle': sid}))
+        return self.bookmark(el, self.runs(el, fmt))
 
     def omath(self, el):
         "An m:oMath zone holding `el`'s text as linear-format math runs"
@@ -728,7 +728,8 @@ class Converter:
                 an.append(E('w:lvl', {'w:ilvl': i},  # chkstyle: ignore-node
                     E('w:start', {'w:val': 1}), E('w:numFmt', {'w:val': fmt}),
                     E('w:pStyle', {'w:val': f'Heading{i + 1}'}) if i < 6 else None,
-                    E('w:lvlText', {'w:val': txt}), E('w:lvlJc', {'w:val': 'left'})))
+                    E('w:lvlText', {'w:val': txt}), E('w:lvlJc', {'w:val': 'left'}),
+                    E('w:pPr', E('w:ind', {'w:left': 360 + 360 * i, 'w:hanging': 360 + 360 * i}))))   # number at the margin, text stair-stepped per level
             root.append(an)
         for e in self.xabs: root.append(e)
         for e in tnums: root.append(e)
@@ -851,7 +852,7 @@ class Converter:
         self.fndefs.update({_get(li, 'id'): li for sec in fn for li in _walk(sec) if _tag(li) == 'li' and _get(li, 'id')})
         return body
 
-    BOOKMARKABLE = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}
+    BOOKMARKABLE = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span'}
 
     def to_docx(self, mdhtml, dest):
         root = parse_frag(mdhtml)
@@ -923,7 +924,7 @@ def convert(mdhtml, dest, reference=None, base=None, reftypes=None, number_headi
     resolve against `base` ('.'). Cross-references (`data-ref` anchors from Markdown `[@sec-x]`) become
     live REF fields; `reftypes` maps type tokens to (singular, plural) prefix words beyond the built-in
     `sec`, and `number_headings` (a styles.SCHEMES name such as 'legal', or a {lvlText: numFmt} dict, one entry per heading level)
-    numbers the headings via a multilevel list so `\\w` fields resolve. Template tokens are dropped
+    numbers the headings via a multilevel list so `\\w` fields resolve; h1 is the unnumbered document title (Title style), so scheme level 1 is h2. Template tokens are dropped
     unless `tmpl` is given: a callable taking the token node dict (`mdhtml.export.tmpl_node`: `body`,
     `syntax`, `form`, `kind`, `name`, `inverted`) and returning a str for a literal text run,
     `('field', instr)` for a live field, `('control', name)` for an interactive plain-text content
