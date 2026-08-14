@@ -1,41 +1,48 @@
 #!/usr/bin/env python
 """Generate the committed template `mdhtml2docx/templates/reference.docx` from a seed archive.
 
-The seed (`_data/empty.docx`, a fresh empty document saved by Word 16.111) supplies theme, fonts,
-settings, and Word's own modern definitions for the styles we keep; this script strips styles.xml
-to exactly what STYLE_MAP needs, patches Quote for blockquote semantics (left indent, not Word's
-centering), authors the definitions Word leaves latent, scrubs personal metadata, applies the house look (see the house section below), and self-verifies:
-fast_checks == 'valid' and every STYLE_MAP name defined. See meta/STATUS.md, template section.
-Without the seed, running this script re-applies the house look to the committed template instead."""
+The seed (`_data/empty.docx`) is an empty document saved by Word for the web: it supplies theme,
+fonts, settings, an empty header and footer slot, and Word's own definitions for the built-in
+styles we keep. The seed supplies what Word's UI can materialize; this script authors the rest.
+To reproduce the seed: in a blank Word (web) document, apply Heading 1-6, Quote, and Title each
+to a throwaway line and make one line a bulleted list (Word then writes out their definitions),
+delete all text and set the last paragraph back to Normal, insert an empty header and footer,
+and download a copy.
+
+Building strips styles.xml to exactly what STYLE_MAP needs, patches Quote for blockquote
+semantics (left indent, not Word's centering), applies the house look (Times New Roman 11pt,
+1.5 spacing, justified prose, bold black headings, a centered Title, a page-number footer),
+authors the definitions Word leaves latent, scrubs personal metadata, and self-verifies:
+fast_checks == 'valid' and every STYLE_MAP name defined."""
 import zipfile
 from lxml import etree
 from mdhtml2docx.styles import STYLE_MAP, style_id
 from mdhtml2docx.validate import fast_checks
-from mdhtml2docx.wml import E, R
-from pathlib import Path
+from mdhtml2docx.wml import E
 
 W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 
 def w(tag): return f'{{{W}}}{tag}'
 
-# Styles the seed defines that we keep as Word authored them (plus linked Char twins, which
-# w:link references require). Everything else the seed defines is dropped.
-KEEP = {'Normal', 'DefaultParagraphFont', 'TableNormal', 'NoList', 'Quote', 'QuoteChar', 'ListParagraph',
-    *[f'Heading{n}' for n in range(1, 7)], *[f'Heading{n}Char' for n in range(1, 7)]}
+# Styles the seed defines that we keep (restyled below where the house look differs from Word's).
+KEEP = {'Normal', 'DefaultParagraphFont', 'TableNormal', 'NoList', 'Quote', 'ListParagraph', 'Title',
+    'Header', 'Footer', *[f'Heading{n}' for n in range(1, 7)]}
 
-# Styles Word keeps latent (definitions live inside Word, absent from the file), authored here.
+font, size, line, space_after = 'Times New Roman', 11, 1.5, 11   # typeface, body points, line spacing multiple, space below paragraphs (points)
+
+# Styles the seed cannot supply, authored here: our own custom styles, plus built-ins that
+# Word keeps latent and the web UI has no path to materialize (caption, footnote text, ...).
 # Built-in names are canonical (lowercase for heading/caption/footnote families); custom ones marked so.
 NEW_STYLES = r'''<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:style w:type="paragraph" w:styleId="Title">
-  <w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:next w:val="FirstParagraph"/><w:uiPriority w:val="10"/><w:qFormat/>
-  <w:pPr><w:jc w:val="center"/></w:pPr>
-  <w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>
-</w:style>
 <w:style w:type="paragraph" w:styleId="BodyText">
   <w:name w:val="Body Text"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="1"/><w:qFormat/>
 </w:style>
 <w:style w:type="paragraph" w:customStyle="1" w:styleId="FirstParagraph">
   <w:name w:val="First Paragraph"/><w:basedOn w:val="BodyText"/><w:next w:val="BodyText"/><w:uiPriority w:val="1"/><w:qFormat/>
+</w:style>
+<w:style w:type="paragraph" w:customStyle="1" w:styleId="Centered">
+  <w:name w:val="Centered"/><w:basedOn w:val="BodyText"/><w:next w:val="BodyText"/><w:qFormat/>
+  <w:pPr><w:ind w:firstLine="0"/><w:jc w:val="center"/></w:pPr>
 </w:style>
 <w:style w:type="paragraph" w:customStyle="1" w:styleId="Compact">
   <w:name w:val="Compact"/><w:basedOn w:val="BodyText"/><w:uiPriority w:val="1"/><w:qFormat/>
@@ -96,8 +103,21 @@ NEW_STYLES = r'''<w:styles xmlns:w="http://schemas.openxmlformats.org/wordproces
 </w:style>
 </w:styles>'''
 
+def _hp(points): return int(round(points * 2))
+def _fonts(): return E('w:rFonts', {'w:ascii': font, 'w:hAnsi': font, 'w:eastAsia': font, 'w:cs': font})
+def _spacing(): return E('w:spacing', {'w:line': int(240 * line), 'w:lineRule': 'auto', 'w:after': space_after * 20})
+def _jc(val): return E('w:jc', {'w:val': val})
+
+def _restyle(root, sid, ppr=None, rpr=None):
+    "Replace style `sid`'s paragraph and run properties, dropping whatever it had"
+    s = root.find(f'{w("style")}[@{w("styleId")}="{sid}"]')
+    for t in ('pPr', 'rPr'):
+        if (e := s.find(w(t))) is not None: s.remove(e)
+    for e in (ppr, rpr):
+        if e is not None: s.append(e)
+
 def build_styles(xml):
-    "Strip the seed's styles.xml to KEEP, fix Quote, append the authored definitions"
+    "Strip the seed's styles.xml to KEEP, patch Quote, apply the house look, append the authored definitions"
     root = etree.fromstring(xml)
     for s in list(root.iter(w('style'))):
         if s.get(w('styleId')) not in KEEP: root.remove(s)
@@ -106,9 +126,35 @@ def build_styles(xml):
     qp.remove(qp.find(w('jc')))
     etree.SubElement(qp, w('ind')).set(w('left'), '720')
     for s in root.iter(w('style')):
-        if s.get(w('styleId')) in ('Quote', *[f'Heading{n}' for n in range(1, 7)]):
+        if s.get(w('styleId')) in ('Quote', 'Title', *[f'Heading{n}' for n in range(1, 7)]):
             s.find(w('next')).set(w('val'), 'FirstParagraph')   # typing after these continues our prose chain
+    rpd = root.find(f'{w("docDefaults")}/{w("rPrDefault")}')
+    rpd.replace(rpd.find(w('rPr')), E('w:rPr', _fonts(), E('w:sz', {'w:val': _hp(size)}),
+        E('w:szCs', {'w:val': _hp(size)}), E('w:lang', {'w:val': 'en-US'})))
+    _restyle(root, 'Normal', E('w:pPr', _spacing(), E('w:ind', {'w:firstLine': 0}), _jc('both')))
+    for i in range(6):
+        rpr = E('w:rPr', _fonts(), E('w:b'), E('w:color', {'w:val': 'auto'}), E('w:sz', {'w:val': _hp(size)}), E('w:szCs', {'w:val': _hp(size)}))
+        _restyle(root, f'Heading{i + 1}', E('w:pPr', _spacing(), _jc('both'), E('w:outlineLvl', {'w:val': i})), rpr)
+    _restyle(root, 'Title', E('w:pPr', _jc('center')), E('w:rPr', E('w:sz', {'w:val': _hp(14)}), E('w:szCs', {'w:val': _hp(14)})))
     for s in etree.fromstring(NEW_STYLES.encode()): root.append(s)
+    return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+
+def footer_content(xml):
+    "word/footer.xml: replace the seed's empty scaffold with a centered page-number field"
+    root = etree.fromstring(xml)
+    for e in list(root): root.remove(e)
+    root.append(E('w:p', E('w:pPr', _jc('center')), E('w:fldSimple', {'w:instr': ' PAGE '}, E('w:r', E('w:t', '1')))))
+    return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+
+
+def doc_content(xml):
+    "word/document.xml: move the sectPr's header/footerReference first, as the schema requires (web Word appends them last)"
+    root = etree.fromstring(xml)
+    sect = root.find(f"{w('body')}/{w('sectPr')}")
+    refs = [e for e in sect if etree.QName(e).localname in ('headerReference', 'footerReference')]
+    for i, e in enumerate(refs):
+        sect.remove(e)
+        sect.insert(i, e)
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
 def scrub_props(xml):
@@ -120,109 +166,32 @@ def scrub_props(xml):
         if e is not None: e.text = 'mdhtml2docx'
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
-# ---- house look ----------------------------------------------------------
-# The default reference is opinionated: serif book typography with justified prose and a
-# page-number footer. Callers wanting another look pass their own reference docx.
-
-FONT, SIZE, LINE, SPACE_AFTER = 'Times New Roman', 11, 1.5, 11   # typeface, body points, line spacing multiple, space below paragraphs (points)
-
-def _hp(points): return int(round(points * 2))
-def _fonts(): return E('w:rFonts', {'w:ascii': FONT, 'w:hAnsi': FONT, 'w:eastAsia': FONT, 'w:cs': FONT})
-def _spacing(): return E('w:spacing', {'w:line': int(240 * LINE), 'w:lineRule': 'auto', 'w:after': SPACE_AFTER * 20})
-def _jc(val): return E('w:jc', {'w:val': val})
-
-def _restyle(root, sid, ppr=None, rpr=None):
-    "Replace style `sid`'s paragraph and run properties, dropping whatever it had"
-    s = root.find(f'{w("style")}[@{w("styleId")}="{sid}"]')
-    for t in ('pPr', 'rPr'):
-        if (e := s.find(w(t))) is not None: s.remove(e)
-    for e in (ppr, rpr):
-        if e is not None: s.append(e)
-
-def house_styles(xml):
-    "House typography: `FONT` at `SIZE`pt for everything, justified prose, bold black headings at body size, plus the Centered block style"
-    root = etree.fromstring(xml)
-    rpd = root.find(f'{w("docDefaults")}/{w("rPrDefault")}')
-    rpd.replace(rpd.find(w('rPr')), E('w:rPr', _fonts(), E('w:sz', {'w:val': _hp(SIZE)}),
-        E('w:szCs', {'w:val': _hp(SIZE)}), E('w:lang', {'w:val': 'en-US'})))
-    _restyle(root, 'Normal', E('w:pPr', _spacing(), E('w:ind', {'w:firstLine': 0}), _jc('both')))
-    for i in range(6):
-        rpr = E('w:rPr', _fonts(), E('w:b'), E('w:color', {'w:val': 'auto'}), E('w:sz', {'w:val': _hp(SIZE)}), E('w:szCs', {'w:val': _hp(SIZE)}))
-        _restyle(root, f'Heading{i + 1}', E('w:pPr', _spacing(), _jc('both'), E('w:outlineLvl', {'w:val': i})), rpr)
-    if root.find(f'{w("style")}[@{w("styleId")}="Centered"]') is None:
-        root.append(E('w:style', {'w:type': 'paragraph', 'w:customStyle': 1, 'w:styleId': 'Centered'},
-            E('w:name', {'w:val': 'Centered'}), E('w:basedOn', {'w:val': 'BodyText'}), E('w:next', {'w:val': 'BodyText'}),
-            E('w:qFormat'), E('w:pPr', E('w:ind', {'w:firstLine': 0}), _jc('center'))))
-    return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
-
-def footer_xml():
-    "word/footer1.xml: a centered page-number field"
-    root = etree.Element(w('ftr'), nsmap=dict(w=W))
-    root.append(E('w:p', E('w:pPr', _jc('center')), E('w:fldSimple', {'w:instr': ' PAGE '}, E('w:r', E('w:t', '1')))))
-    return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
-
-CTNS = 'http://schemas.openxmlformats.org/package/2006/content-types'
-RNS = 'http://schemas.openxmlformats.org/package/2006/relationships'
-
-def add_footer(parts):
-    "Wire the page-number footer into archive `parts` (name -> bytes), unless one is already present"
-    if 'word/footer1.xml' in parts: return
-    parts['word/footer1.xml'] = footer_xml()
-    ct = etree.fromstring(parts['[Content_Types].xml'])
-    etree.SubElement(ct, f'{{{CTNS}}}Override', PartName='/word/footer1.xml',
-        ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml')
-    parts['[Content_Types].xml'] = etree.tostring(ct, xml_declaration=True, encoding='UTF-8', standalone=True)
-    rels = etree.fromstring(parts['word/_rels/document.xml.rels'])
-    rid = f"rId{max((int(r.get('Id')[3:]) for r in rels if r.get('Id', '').startswith('rId')), default=0) + 1}"
-    etree.SubElement(rels, f'{{{RNS}}}Relationship', Id=rid,
-        Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer', Target='footer1.xml')
-    parts['word/_rels/document.xml.rels'] = etree.tostring(rels, xml_declaration=True, encoding='UTF-8', standalone=True)
-    droot = etree.fromstring(parts['word/document.xml'])
-    sect = droot.find(f'{w("body")}/{w("sectPr")}')
-    fr = E('w:footerReference', {'w:type': 'default'})
-    fr.set(f'{{{R}}}id', rid)
-    sect.insert(0, fr)
-    parts['word/document.xml'] = etree.tostring(droot, xml_declaration=True, encoding='UTF-8', standalone=True)
-
-def house(parts):
-    "Apply the house look to reference `parts` in place"
-    parts['word/styles.xml'] = house_styles(parts['word/styles.xml'])
-    add_footer(parts)
-
-def _parts(path):
-    with zipfile.ZipFile(path) as z: return {i.filename: z.read(i.filename) for i in z.infolist()}
-
-def _write(parts, out):
-    with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zo:
-        for name, data in parts.items(): zo.writestr(name, data)
-
 def build(seed='_data/empty.docx', out='mdhtml2docx/templates/reference.docx'):
-    parts = _parts(seed)
-    parts['word/styles.xml'] = build_styles(parts['word/styles.xml'])
-    parts['docProps/core.xml'] = scrub_props(parts['docProps/core.xml'])
-    house(parts)
-    _write(parts, out)
+    z = zipfile.ZipFile(seed)
+    with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zo:
+        for i in z.infolist():
+            data = z.read(i.filename)
+            if i.filename == 'word/styles.xml': data = build_styles(data)
+            elif i.filename == 'word/footer.xml': data = footer_content(data)
+            elif i.filename == 'word/document.xml': data = doc_content(data)
+            elif i.filename == 'docProps/core.xml': data = scrub_props(data)
+            zo.writestr(i.filename, data)
     verify(out)
     print(f'{out}: ok')
 
-def restyle(path='mdhtml2docx/templates/reference.docx'):
-    "Re-apply the house look to the committed template, for machines without the seed"
-    parts = _parts(path)
-    house(parts)
-    _write(parts, path)
-    verify(path)
-    print(f'{path}: restyled')
-
 def verify(path):
-    "The template must pass fast_checks and define (not leave latent) every STYLE_MAP style"
+    "The template must pass fast_checks, define (not leave latent) every STYLE_MAP style, and carry the page-number footer"
     r = fast_checks(path)
     assert r == 'valid', r
-    root = etree.fromstring(zipfile.ZipFile(path).read('word/styles.xml'))
+    z = zipfile.ZipFile(path)
+    root = etree.fromstring(z.read('word/styles.xml'))
     names = {s.find(w('name')).get(w('val')) for s in root.iter(w('style'))}
     missing = set(STYLE_MAP.values()) - names
     assert not missing, f'STYLE_MAP styles not defined: {missing}'
     ids = {s.get(w('styleId')) for s in root.iter(w('style'))}
     badid = {n for n in STYLE_MAP.values() if style_id(n) not in ids}
     assert not badid, f'style_id mismatch for: {badid}'
+    assert b'PAGE' in z.read('word/footer.xml'), 'footer lacks its page-number field'
+    assert z.read('word/document.xml').decode().count('footerReference') == 1, 'expected exactly one footerReference'
 
-if __name__ == '__main__': build() if Path('_data/empty.docx').exists() else restyle()
+if __name__ == '__main__': build()

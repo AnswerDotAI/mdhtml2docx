@@ -96,8 +96,8 @@ def test_default_reference():
     styles = z.read('word/styles.xml').decode()
     for s in ('w:styleId="Title"', 'w:styleId="Centered"', 'Times New Roman'): tt(s, styles, in_)
     tt('w:val="both"', re.search(r'<w:style [^>]*w:styleId="Normal".*?</w:style>', styles, re.S).group(0), in_)
-    tt(' PAGE ', z.read('word/footer1.xml').decode(), in_)
-    tt('footer1.xml', z.read('word/_rels/document.xml.rels').decode(), in_)
+    tt(' PAGE ', z.read('word/footer.xml').decode(), in_)
+    tt('footer.xml', z.read('word/_rels/document.xml.rels').decode(), in_)
     tt('footerReference', z.read('word/document.xml').decode(), in_)
 
 
