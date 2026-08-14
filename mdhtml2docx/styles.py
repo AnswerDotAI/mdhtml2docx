@@ -5,7 +5,7 @@ __all__ = ['STYLE_MAP', 'style_id', 'ref_path', 'theme_styles', 'theme_ref']
 
 STYLE_MAP = dict(  # chkstyle: ignore-node
     body='Body Text', firstpara='First Paragraph', blockquote='Quote', codeblock='Source Code', codeinline='Verbatim Char',
-    h1='heading 1', h2='heading 2', h3='heading 3', h4='heading 4', h5='heading 5', h6='heading 6',
+    h1='Title', h2='heading 1', h3='heading 2', h4='heading 3', h5='heading 4', h6='heading 5',
     compact='Compact', hyperlink='Hyperlink', list='List Paragraph', dt='Definition Term', dd='Definition',
     caption='caption', footnotetext='footnote text', footnoteref='footnote reference', table='Table Grid')
 

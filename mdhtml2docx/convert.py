@@ -41,7 +41,7 @@ def parse_frag(src):
     return parse_mdhtml(src)
 
 class Converter:
-    def __init__(self, reference=None, base=None, reftypes=None, number_headings=None, tmpl=None):
+    def __init__(self, reference=None, base=None, reftypes=None, number_headings=None, numbered_lists=None, tmpl=None):
         self.tmpl = tmpl
         if reference is None: reference = [_refpath()] + (['github_light'] if tokenize else [])
         elif not isinstance(reference, (list, tuple)): reference = [reference]
@@ -91,6 +91,11 @@ class Converter:
         if number_headings and self.sroot.find(f'{{{W}}}style[@{{{W}}}styleId="Heading1"]/{{{W}}}pPr/{{{W}}}numPr') is None:
             self._numid += 1
             self.headnum = self._numid
+        if isinstance(numbered_lists, str):
+            if numbered_lists not in SCHEMES: raise ValueError(f'unknown numbering scheme {numbered_lists!r}')
+            numbered_lists = SCHEMES[numbered_lists]
+        self.listscheme = list(numbered_lists.items()) if numbered_lists else None
+        self.listnum = None   # shared num instance for every ol, allocated at first use
         self._adopt_contrib_nums()
 
     def _merge_styles(self, ref):
@@ -207,12 +212,12 @@ class Converter:
 
     def ref_fld(self, el, fmt):
         """REF/PAGEREF field for a cross-reference `a`, with a cached placeholder Word replaces on update.
-        Heading/paragraph targets number via `\\w`; caption targets return their bookmarked 'Label N' text
+        Heading, paragraph, list-item, and span targets number via `\\w`; caption targets return their bookmarked 'Label N' text
         (or the number-only `_n` bookmark for bare/leaf/rel refs), so `\\w` never applies to them."""
         tgt = (_get(el, 'href') or '#')[1:]
         tokens = ref_tokens(_get(el, 'data-ref'))
         if tgt not in self.reftarget:
-            raise ValueError(f'cross-reference target #{tgt} not found (targets are headings, paragraphs, figures, and tables with ids)')
+            raise ValueError(f'cross-reference target #{tgt} not found (targets are headings, paragraphs, list items, spans, figures, and tables with ids)')
         kind = ref_variant(tokens)
         nm, self.has_fields = self.bkname(tgt), True
         if kind == 'page': instr, cached = rf' PAGEREF {nm} \h ', '#'
@@ -247,11 +252,11 @@ class Converter:
         return next((self.refstyles[c.lower()] for c in _classes(el) if c.lower() in self.refstyles), None)
 
     def span(self, el, fmt):
-        "Inline span: math -> inline m:oMath zone (linear source, dialect-agnostic), custom style -> rStyle, else transparent"
+        "Inline span: math -> inline m:oMath zone (linear source, dialect-agnostic), custom style -> rStyle, else transparent; an id becomes a bookmark (REF target)"
         if _get(el, 'data-refs') is not None: return self.ref_group(el, fmt)
         if 'math' in _classes(el): return [self.omath(el)]
-        if sid := self.custom_style(el, 'character'): return self.runs(el, fmt | {'rstyle': sid})
-        return self.runs(el, fmt)
+        if sid := self.custom_style(el, 'character'): return self.bookmark(el, self.runs(el, fmt | {'rstyle': sid}))
+        return self.bookmark(el, self.runs(el, fmt))
 
     def omath(self, el):
         "An m:oMath zone holding `el`'s text as linear-format math runs"
@@ -389,10 +394,16 @@ class Converter:
 
     # ---- lists --------------------------------------------------------------
     def list_el(self, el, ilvl=0):
-        "A ul/ol: fresh num instance (so each ordered list restarts), items at level `ilvl`"
-        self._numid += 1
-        nid = self._numid
-        self.nums.append((nid, 0 if _tag(el) == 'ul' else 1, int(_get(el, 'start', 1))))
+        "A ul/ol: items at level `ilvl`, numbered by a fresh num instance per list (so each restarts), or by the one shared instance for ols under `numbered_lists`"
+        if self.listscheme is not None and _tag(el) == 'ol':
+            if not self.listnum:
+                self._numid += 1
+                self.listnum = self._numid
+            nid = self.listnum
+        else:
+            self._numid += 1
+            nid = self._numid
+            self.nums.append((nid, 0 if _tag(el) == 'ul' else 1, int(_get(el, 'start', 1))))
         return [b for li in _els(el) if _tag(li) == 'li' for b in self.li(li, nid, min(ilvl, 8))]
 
     def li_parts(self, el):
@@ -412,16 +423,17 @@ class Converter:
         return [r for node in nodes for r in self.inline_node(node, fmt)]
 
     def li(self, li, nid, ilvl):
-        "Blocks for one list item: the first paragraph carries the number, the rest continue indented"
+        "Blocks for one list item: the first paragraph carries the number (and the li's id as a bookmark), the rest continue indented"
         numpr = [E('w:numPr', E('w:ilvl', {'w:val': ilvl}), E('w:numId', {'w:val': nid}))]
         cont = [E('w:ind', {'w:left': 720 * (ilvl + 1)})]
         out = []
+        def first(runs): return self.bookmark(li, runs) if not out else runs
         for kind, val in self.li_parts(li):
-            if kind == 'inline': out.append(self.para(self.group_runs(val, {}), 'list', numpr if not out else cont))
+            if kind == 'inline': out.append(self.para(first(self.group_runs(val, {})), 'list', numpr if not out else cont))
             elif _tag(val) in ('ul', 'ol'): out += self.list_el(val, ilvl + 1)
-            elif _tag(val) == 'p': out.append(self.para(self.runs(val, {}), 'list', numpr if not out else cont))
+            elif _tag(val) == 'p': out.append(self.para(first(self.runs(val, {})), 'list', numpr if not out else cont))
             else: out += self.block(val, 'list')
-        return out or [self.para([], 'list', numpr)]
+        return out or [self.para(self.bookmark(li, []), 'list', numpr)]
 
     # ---- tables -------------------------------------------------------------
     def table_grid(self, rows):
@@ -706,6 +718,7 @@ class Converter:
     def numbering_xml(self):
         """word/numbering.xml: the template's part (if any) merged with our list definitions (bullet and
         decimal abstracts, one num per list with startOverrides so each restarts), the heading scheme,
+        the shared `numbered_lists` scheme (one num, no overrides: Word counts document order),
         and .xml contributors' definitions - all abstractNum before all num, as the schema requires"""
         root = self.tmplnum if self.tmplnum is not None else etree.Element(qn('w:numbering'), nsmap=dict(w=W))
         tnums = [e for e in root if etree.QName(e).localname == 'num']
@@ -728,11 +741,22 @@ class Converter:
                 an.append(E('w:lvl', {'w:ilvl': i},  # chkstyle: ignore-node
                     E('w:start', {'w:val': 1}), E('w:numFmt', {'w:val': fmt}),
                     E('w:pStyle', {'w:val': f'Heading{i + 1}'}) if i < 6 else None,
-                    E('w:lvlText', {'w:val': txt}), E('w:lvlJc', {'w:val': 'left'})))
+                    E('w:lvlText', {'w:val': txt}), E('w:lvlJc', {'w:val': 'left'}),
+                    E('w:pPr', E('w:ind', {'w:left': 360 + 360 * i, 'w:hanging': 360 + 360 * i}))))   # number at the margin, text stair-stepped per level
+            root.append(an)
+        if self.listnum:
+            an = E('w:abstractNum', {'w:abstractNumId': self._absbase + 3}, E('w:multiLevelType', {'w:val': 'multilevel'}))
+            for i in range(9):
+                txt, fmt = self.listscheme[i] if i < len(self.listscheme) else (f'%{i+1}.', 'decimal')
+                an.append(E('w:lvl', {'w:ilvl': i},  # chkstyle: ignore-node
+                    E('w:start', {'w:val': 1}), E('w:numFmt', {'w:val': fmt}),
+                    E('w:lvlText', {'w:val': txt}), E('w:lvlJc', {'w:val': 'left'}),
+                    E('w:pPr', E('w:ind', {'w:left': 720 * (i + 1), 'w:hanging': 360}))))
             root.append(an)
         for e in self.xabs: root.append(e)
         for e in tnums: root.append(e)
         if self.headnum: root.append(E('w:num', {'w:numId': self.headnum}, E('w:abstractNumId', {'w:val': self._absbase + 2})))
+        if self.listnum: root.append(E('w:num', {'w:numId': self.listnum}, E('w:abstractNumId', {'w:val': self._absbase + 3})))
         for e in self.xnums: root.append(e)
         for nid, aid, start in self.nums:
             root.append(E('w:num', {'w:numId': nid}, E('w:abstractNumId', {'w:val': self._absbase + aid}),  # chkstyle: ignore-node
@@ -851,7 +875,7 @@ class Converter:
         self.fndefs.update({_get(li, 'id'): li for sec in fn for li in _walk(sec) if _tag(li) == 'li' and _get(li, 'id')})
         return body
 
-    BOOKMARKABLE = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}
+    BOOKMARKABLE = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'span'}
 
     def to_docx(self, mdhtml, dest):
         root = parse_frag(mdhtml)
@@ -867,7 +891,7 @@ class Converter:
         blocks = self.block_nodes(nodes)
         docxml = self.document(blocks)
         parts = {}   # archive name -> (bytes, content-type kind); each also gets a document rel
-        if self.nums or self.headnum or self.xnums:
+        if self.nums or self.headnum or self.listnum or self.xnums:
             parts['word/numbering.xml'] = (self.numbering_xml(), 'numbering')
             if self.tmplnum is None: self.rels.append((self.rid(), f'{R}/numbering', 'numbering.xml', False))
         if self.fnotes:
@@ -913,7 +937,7 @@ def mustache_fields(node):
 
 
 
-def convert(mdhtml, dest, reference=None, base=None, reftypes=None, number_headings=None, tmpl=None):
+def convert(mdhtml, dest, reference=None, base=None, reftypes=None, number_headings=None, numbered_lists=None, tmpl=None):
     """Convert an MDHTML string or mutable fast5ever DOM to a docx file at `dest`; returns warnings.
     `reference` is a reference docx path, or a list of them: the first supplies the whole archive
     (default, or when None: the built-in template), later entries contribute styles only, later-wins -
@@ -923,11 +947,14 @@ def convert(mdhtml, dest, reference=None, base=None, reftypes=None, number_headi
     resolve against `base` ('.'). Cross-references (`data-ref` anchors from Markdown `[@sec-x]`) become
     live REF fields; `reftypes` maps type tokens to (singular, plural) prefix words beyond the built-in
     `sec`, and `number_headings` (a styles.SCHEMES name such as 'legal', or a {lvlText: numFmt} dict, one entry per heading level)
-    numbers the headings via a multilevel list so `\\w` fields resolve. Template tokens are dropped
+    numbers the headings via a multilevel list so `\\w` fields resolve; h1 is the unnumbered document title (Title style), so scheme level 1 is h2. `numbered_lists` (same scheme forms) instead
+    numbers every ordered list through one shared multilevel instance: Word computes the numbers in document order
+    (typed start values are ignored), numbering continues across intervening blocks, deeper levels restart under a
+    higher-level item, and bullet lists are unaffected. Template tokens are dropped
     unless `tmpl` is given: a callable taking the token node dict (`mdhtml.export.tmpl_node`: `body`,
     `syntax`, `form`, `kind`, `name`, `inverted`) and returning a str for a literal text run,
     `('field', instr)` for a live field, `('control', name)` for an interactive plain-text content
     control, `('bound', name)` for a content control data-bound to a shared per-variable XML node
     (same-name controls stay in sync as one is filled), or None to drop; range markers never reach `tmpl` and render as literal «body» runs - `mustache_fields` here
     is the ready-made recipe."""
-    return Converter(reference, base, reftypes, number_headings, tmpl).to_docx(mdhtml, dest)
+    return Converter(reference, base, reftypes, number_headings, numbered_lists, tmpl).to_docx(mdhtml, dest)
