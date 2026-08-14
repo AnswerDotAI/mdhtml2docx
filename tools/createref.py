@@ -1,19 +1,12 @@
 #!/usr/bin/env python
 """Generate the committed template `mdhtml2docx/templates/reference.docx` from a seed archive.
 
-The seed (`_data/empty.docx`) is an empty document saved by Word for the web: it supplies theme,
-fonts, settings, an empty header and footer slot, and Word's own definitions for the built-in
-styles we keep. The seed supplies what Word's UI can materialize; this script authors the rest.
-To reproduce the seed: in a blank Word (web) document, apply Heading 1-6, Quote, and Title each
-to a throwaway line and make one line a bulleted list (Word then writes out their definitions),
-delete all text and set the last paragraph back to Normal, insert an empty header and footer,
-and download a copy.
-
-Building strips styles.xml to exactly what STYLE_MAP needs, patches Quote for blockquote
-semantics (left indent, not Word's centering), applies the house look (Times New Roman 11pt,
-1.5 spacing, justified prose, bold black headings, a centered Title, a page-number footer),
-authors the definitions Word leaves latent, scrubs personal metadata, and self-verifies:
-fast_checks == 'valid' and every STYLE_MAP name defined."""
+The seed (`_data/empty.docx`, an empty document saved by Word for the web, with header/footer
+inserted and each kept style applied once so Word writes out its definitions) supplies theme,
+fonts, settings, and Word's own definitions for the styles we keep; this script strips styles.xml
+to exactly what STYLE_MAP needs, patches Quote for blockquote semantics (left indent, not Word's
+centering), applies the house look, authors the definitions Word leaves latent, scrubs personal
+metadata, and self-verifies: fast_checks == 'valid' and every STYLE_MAP name defined."""
 import zipfile
 from lxml import etree
 from mdhtml2docx.styles import STYLE_MAP, style_id
@@ -28,10 +21,9 @@ def w(tag): return f'{{{W}}}{tag}'
 KEEP = {'Normal', 'DefaultParagraphFont', 'TableNormal', 'NoList', 'Quote', 'ListParagraph', 'Title',
     'Header', 'Footer', *[f'Heading{n}' for n in range(1, 7)]}
 
-font, size, line, space_after = 'Times New Roman', 11, 1.5, 11   # typeface, body points, line spacing multiple, space below paragraphs (points)
+font, size, line, space_after = 'Times New Roman', 11, 1.5, 11
 
-# Styles the seed cannot supply, authored here: our own custom styles, plus built-ins that
-# Word keeps latent and the web UI has no path to materialize (caption, footnote text, ...).
+# Styles the seed cannot supply: our custom styles, plus built-ins the web UI cannot materialize.
 # Built-in names are canonical (lowercase for heading/caption/footnote families); custom ones marked so.
 NEW_STYLES = r'''<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:style w:type="paragraph" w:styleId="BodyText">
