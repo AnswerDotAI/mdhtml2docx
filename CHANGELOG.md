@@ -1,5 +1,12 @@
 <!-- do not remove -->
 
+## 0.1.2
+
+### New Features
+
+- Support cross-references to text targets (spans, definition terms) via shared mdhtml Resolver; bookmark span and dt elements ([#10](https://github.com/AnswerDotAI/mdhtml2docx/issues/10))
+
+
 ## 0.1.1
 
 ### New Features
