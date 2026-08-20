@@ -10,7 +10,7 @@ from pathlib import Path
 from fast5ever import Comment, Element, Node, Text
 from lxml import etree
 from mdhtml import parse_mdhtml
-from mdhtml.export import REFTYPES, SCHEMES, decode_raw, tmpl_node, group_plan, ref_tokens, ref_variant
+from mdhtml.export import REFTYPES, SCHEMES, decode_raw, tmpl_node, group_plan, ref_tokens, ref_variant, target_kind, Resolver
 from .styles import STYLE_MAP, style_id, theme_styles
 from .styles import ref_path as _refpath
 from .wml import *
@@ -195,34 +195,30 @@ class Converter:
         return self._bknames[id]
 
     def ref_prefix(self, el, fmt, plural=False):
-        "Literal runs before a reference field: override text, the type prefix word, or nothing for bare and caption refs"
-        pre = el.to_text().strip()
-        if not pre:
-            tgt = (_get(el, 'href') or '#')[1:]
-            if 'bare' in ref_tokens(_get(el, 'data-ref')) or self.reftarget.get(tgt) == 'caption': return []
-            t = tgt.split('-')[0]
-            if t not in self.reftypes: raise ValueError(f'unknown reference type {t!r}; pass reftypes= to define its prefix')
-            pre = self.reftypes[t][plural]
-        return self.text_runs(pre + ' ', fmt)
+        "Literal runs before a reference field: the shared `Resolver.prefix` (override text, the type word, or nothing for bare, caption, and text refs)"
+        tgt = (_get(el, 'href') or '#')[1:]
+        pre = self.res.prefix(el.to_text().strip(), tgt, ref_tokens(_get(el, 'data-ref')), plural)
+        return self.text_runs(pre, fmt) if pre else []
 
     def ref_fld(self, el, fmt):
         """REF/PAGEREF field for a cross-reference `a`, with a cached placeholder Word replaces on update.
         Heading/paragraph targets number via `\\w`; caption targets return their bookmarked 'Label N' text
-        (or the number-only `_n` bookmark for bare/leaf/rel refs), so `\\w` never applies to them."""
+        (or the number-only `_n` bookmark for bare/leaf/rel refs), and text targets (spans, definition
+        terms) their bookmark text, so `\\w` never applies to either."""
         tgt = (_get(el, 'href') or '#')[1:]
         tokens = ref_tokens(_get(el, 'data-ref'))
-        if tgt not in self.reftarget:
-            raise ValueError(f'cross-reference target #{tgt} not found (targets are headings, paragraphs, figures, and tables with ids)')
-        kind = ref_variant(tokens)
+        self.res.check(tgt)
+        variant = ref_variant(tokens)
         nm, self.has_fields = self.bkname(tgt), True
-        if kind == 'page': instr, cached = rf' PAGEREF {nm} \h ', '#'
+        if variant == 'page': instr, cached = rf' PAGEREF {nm} \h ', '#'
         elif self.reftarget[tgt] == 'caption':
-            bare = 'bare' in tokens or kind in ('leaf', 'rel')
+            bare = 'bare' in tokens or variant in ('leaf', 'rel')
             instr, cached = (rf' REF {nm}_n \h ' if bare else rf' REF {nm} \h '), '#'
+        elif self.reftarget[tgt] == 'text': instr, cached = rf' REF {nm} \h ', self.res.core(tgt, tokens)
         else:
-            sw = self.REFSWITCH[kind]
+            sw = self.REFSWITCH[variant]
             instr = rf' REF {nm} {sw} \h ' if sw else rf' REF {nm} \h '
-            cached = self.idtext.get(tgt, '#') if kind == 'text' else '#'
+            cached = self.idtext.get(tgt, '#') if variant == 'text' else '#'
         return [E('w:fldSimple', {'w:instr': instr}, E('w:r', self.rpr(fmt), E('w:t', cached)))]
 
     def ref_group(self, el, fmt):
@@ -247,11 +243,11 @@ class Converter:
         return next((self.refstyles[c.lower()] for c in _classes(el) if c.lower() in self.refstyles), None)
 
     def span(self, el, fmt):
-        "Inline span: math -> inline m:oMath zone (linear source, dialect-agnostic), custom style -> rStyle, else transparent"
+        "Inline span: math -> inline m:oMath zone (linear source, dialect-agnostic), custom style -> rStyle, else transparent; an id bookmarks the runs"
         if _get(el, 'data-refs') is not None: return self.ref_group(el, fmt)
-        if 'math' in _classes(el): return [self.omath(el)]
-        if sid := self.custom_style(el, 'character'): return self.runs(el, fmt | {'rstyle': sid})
-        return self.runs(el, fmt)
+        if 'math' in _classes(el): return self.bookmark(el, [self.omath(el)])
+        if sid := self.custom_style(el, 'character'): return self.bookmark(el, self.runs(el, fmt | {'rstyle': sid}))
+        return self.bookmark(el, self.runs(el, fmt))
 
     def omath(self, el):
         "An m:oMath zone holding `el`'s text as linear-format math runs"
@@ -653,7 +649,7 @@ class Converter:
         out = []
         for c in _els(el):
             t = _tag(c)
-            if t == 'dt': out.append(self.para(self.runs(c, {}), 'dt'))
+            if t == 'dt': out.append(self.para(self.bookmark(c, self.runs(c, {})), 'dt'))
             elif t == 'dd':
                 blocky = any(_tag(k) in BLOCK_TAGS for k in _els(c))
                 out += self.blocks(c, 'dd') if blocky else [self.para(self.runs(c, {}), 'dd')]
@@ -851,18 +847,16 @@ class Converter:
         self.fndefs.update({_get(li, 'id'): li for sec in fn for li in _walk(sec) if _tag(li) == 'li' and _get(li, 'id')})
         return body
 
-    BOOKMARKABLE = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}
-
     def to_docx(self, mdhtml, dest):
         root = parse_frag(mdhtml)
         nodes = self.harvest_footnotes(root.children)
-        self.idtext, self.reftarget = {}, {}
+        self.idtext, self.reftarget, self.res = {}, {}, Resolver(self.reftypes)
         for e in (e for node in nodes if isinstance(node, Element) for e in _walk(node)):
             if not (i := _get(e, 'id')): continue
             self.idtext[i] = ' '.join(e.to_text().split())
-            t = _tag(e)
-            if t in ('figure', 'table'): self.reftarget[i] = 'caption'
-            elif t in self.BOOKMARKABLE: self.reftarget[i] = 'block'
+            k = target_kind(_tag(e))
+            if k: self.reftarget[i] = k
+            self.res.register(i, k, self.idtext[i])
         self.ids = set(self.idtext)
         blocks = self.block_nodes(nodes)
         docxml = self.document(blocks)

@@ -308,6 +308,21 @@ def test_xrefs(tmp_path):
     tfail(lambda: convert('<p><a href="#sec-pay" data-ref="page text"></a></p>', out), contains='conflicting data-ref')
 
 
+def test_text_targets(tmp_path):
+    out = tmp_path/'t.docx'
+    warns = convert(
+        '<h1 id="sec-d">Defs</h1>\n'
+        '<dl><dt id="def-term"><strong>"Term"</strong></dt><dt id="def-ap">Agreement Period</dt>'
+        '<dd>the deal period</dd></dl>\n'
+        '<p>The <span id="def-eff">Effective Date</span> is set.</p>\n'
+        '<p>The <a href="#def-term" data-ref=""></a> starts on the <a href="#def-eff" data-ref=""></a>; '
+        'see <a href="#def-ap" data-ref="page"></a>.</p>', out)
+    teq(warns, [])
+    teq(fast_checks(out), 'valid')
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    for s in (r'REF def_term \h', r'REF def_eff \h', r'PAGEREF def_ap \h',
+        'w:name="def_term"', 'w:name="def_eff"', '"Term"', 'Effective Date'): tt(s, doc, in_)
+
 def test_xrefs_numbered_reference_doc(tmp_path):
     "A numbered docx (made by us) as reference: numbering merges with list numbering, no reinjection"
     ref = tmp_path/'ref.docx'
