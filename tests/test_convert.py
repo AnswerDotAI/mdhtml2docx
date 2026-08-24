@@ -4,10 +4,10 @@ from pathlib import Path
 from fastcore.test import test_eq as teq, test as tt, test_fail as tfail
 from fastcore.utils import in_
 
-from mdhtml import DASHES, replacements, parse_mdhtml, to_mdhtml
+from mdhtml import DASHES, replacements, mdhtml2dom, md2mdhtml
 from mdhtml.mustache import MUSTACHE
 from mdhtml.tools import SAMPLE_MD, sample_md
-from mdhtml2docx.convert import convert, mustache_fields
+from mdhtml2docx.mdhtml2docx import mdhtml2docx, mustache_fields
 from mdhtml2docx.validate import fast_checks
 
 
@@ -20,7 +20,7 @@ def pandoc(path, to='markdown'):
 
 def test_skeleton(tmp_path):
     out = tmp_path/'t.docx'
-    convert('<p>Hello <em>world</em> with <strong>bold</strong> and <strong><em>both</em></strong>.</p>\n'
+    mdhtml2docx('<p>Hello <em>world</em> with <strong>bold</strong> and <strong><em>both</em></strong>.</p>\n'
         '<p>Second para.</p>', out)
     teq(fast_checks(out), 'valid')
     md = pandoc(out)
@@ -33,28 +33,28 @@ def test_skeleton(tmp_path):
 
 def test_dash_replacements(tmp_path):
     out = tmp_path/'t.docx'
-    convert(to_mdhtml('scores 3--5 -- nice... `a--b`', callbacks={'text': replacements(*DASHES)}), out)
+    mdhtml2docx(md2mdhtml('scores 3--5 -- nice... `a--b`', callbacks={'text': replacements(*DASHES)}), out)
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     for s in ('3–5', ' – nice… ', 'a--b'): tt(s, doc, in_)
 
 
 def test_html5_fragment_and_mutable_dom_input(tmp_path):
     out = tmp_path/'t.docx'
-    dom = parse_mdhtml('<p>Before <div>middle</div> after.</p><span zoop:33="x">tail</span>'
+    dom = mdhtml2dom('<p>Before <div>middle</div> after.</p><span zoop:33="x">tail</span>'
         '<!-- this is a -- comment --><input type="date"><template><p>hidden</p></template>')
     dom.children[1].attrs['data-kind'] = 'changed'
-    warns = convert(dom, out)
+    warns = mdhtml2docx(dom, out)
     teq(warns, ["unhandled inline <input type='date'>; dropped"])
     md = pandoc(out)
     for s in ('Before', 'middle', 'after.', 'tail'): tt(s, md, in_)
     assert 'hidden' not in md
-    convert('<template><p>still hidden</p></template>', out)
+    mdhtml2docx('<template><p>still hidden</p></template>', out)
     assert '<w:p>' not in zipfile.ZipFile(out).read('word/document.xml').decode()
 
 
 def test_basic_blocks(tmp_path):
     out = tmp_path/'t.docx'
-    warns = convert(
+    warns = mdhtml2docx(
         '<h1 id="top">Title</h1>\n<h2>Sub <em>title</em></h2>\n'
         '<p>Call <code>f(x)</code> or see <a href="https://fast.ai/">fast.ai</a> '
         'and <a href="#top">the title</a>.</p>\n'
@@ -72,7 +72,7 @@ def test_basic_blocks(tmp_path):
 
 def test_lists(tmp_path):
     out = tmp_path/'t.docx'
-    warns = convert(
+    warns = mdhtml2docx(
         '<ul>\n<li>one</li>\n<li>two\n<ul>\n<li>deep</li>\n</ul>\n</li>\n</ul>\n'
         '<ol>\n<li>first</li>\n<li>second</li>\n</ol>\n'
         '<ol start="5">\n<li>fifth</li>\n</ol>\n'
@@ -91,7 +91,7 @@ def test_lists(tmp_path):
 
 def test_tables(tmp_path):
     out = tmp_path/'t.docx'
-    warns = convert(
+    warns = mdhtml2docx(
         '<table colwidths="10em 2fr 1fr">\n<thead>\n'
         '<tr><th align="left">Feature</th><th align="center">Status</th><th align="right">Notes</th></tr>\n'
         '</thead>\n<tbody>\n'
@@ -116,7 +116,7 @@ def test_tables(tmp_path):
 def test_more_features(tmp_path):
     out = tmp_path/'t.docx'
     img = Path(__file__).parent/'fixtures'/'tiny.png'
-    warns = convert(
+    warns = mdhtml2docx(
         '<p>H<sub>2</sub>O, E=mc<sup>2</sup>, <del>gone</del>, <mark>hot</mark>, <u>under</u>.</p>\n'
         '<hr>\n'
         '<dl>\n<dt>term</dt>\n<dd>definition here</dd>\n</dl>\n'
@@ -162,7 +162,7 @@ def test_imgsize():
 
 def test_math(tmp_path):
     out = tmp_path/'t.docx'
-    warns = convert('<p>Euler: <span class="math inline">e^{i\\pi} + 1 = 0</span> inline.</p>\n'
+    warns = mdhtml2docx('<p>Euler: <span class="math inline">e^{i\\pi} + 1 = 0</span> inline.</p>\n'
         '<div class="math display">E = mc^2</div>', out)
     teq(warns, [])
     teq(fast_checks(out), 'valid')
@@ -180,7 +180,7 @@ def test_sample(tmp_path):
     from lxml import etree
     from mdhtml2docx.styles import STYLE_MAP, style_id
     out = tmp_path/'sample.docx'
-    warns = convert(to_mdhtml(sample_md(), callbacks={'text': replacements(*DASHES)}, implicit_figures=True), out, base=SAMPLE_MD.parent, number_headings='legal')
+    warns = mdhtml2docx(md2mdhtml(sample_md(), callbacks={'text': replacements(*DASHES)}, implicit_figures=True), out, base=SAMPLE_MD.parent, number_headings='legal')
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
@@ -207,7 +207,7 @@ def test_sample(tmp_path):
 def test_code_highlight(tmp_path):
     "fastpylight scopes: language-classed blocks get Hl* character styles from the theme ref; text still round-trips"
     out = tmp_path/'t.docx'
-    warns = convert('<pre><code class="language-python">def f(x):\n    return "hi"\n</code></pre>\n'
+    warns = mdhtml2docx('<pre><code class="language-python">def f(x):\n    return "hi"\n</code></pre>\n'
         '<pre><code>no language here</code></pre>', out)
     teq(warns, [])
     teq(fast_checks(out), 'valid')
@@ -228,7 +228,7 @@ def test_theme_refs(tmp_path):
     from mdhtml2docx.styles import ref_path, theme_ref
     mdhtml = '<pre><code class="language-python">def f(x):\n    return x\n</code></pre>'
     out = tmp_path/'t.docx'
-    convert(mdhtml, out, reference=[ref_path(), 'dracula'])
+    mdhtml2docx(mdhtml, out, reference=[ref_path(), 'dracula'])
     teq(fast_checks(out), 'valid')
     styles = zipfile.ZipFile(out).read('word/styles.xml').decode()
     tt('w:styleId="HlKeyword"', styles, in_)
@@ -240,12 +240,12 @@ def test_theme_refs(tmp_path):
     ref = theme_ref('dracula', tmp_path/'dracula.docx')
     teq(fast_checks(ref), 'valid')
     out2 = tmp_path/'t2.docx'
-    convert(mdhtml, out2, reference=[ref_path(), ref])
+    mdhtml2docx(mdhtml, out2, reference=[ref_path(), ref])
     ids = lambda p: sorted(s.split('"')[1] for s in zipfile.ZipFile(p).read('word/styles.xml').decode().split('w:styleId=')[1:])
     teq(ids(out2), ids(out))
     # single custom reference (no theme entry) = plain code
     out3 = tmp_path/'t3.docx'
-    convert(mdhtml, out3, reference=ref_path())
+    mdhtml2docx(mdhtml, out3, reference=ref_path())
     assert 'HlKeyword' not in zipfile.ZipFile(out3).read('word/document.xml').decode()
 
 
@@ -262,7 +262,7 @@ def test_segments_scopes():
 def test_raw_docx(tmp_path):
     out = tmp_path/'t.docx'
     b64 = base64.b64encode(b'<w:r><w:t>B64</w:t></w:r>').decode()
-    warns = convert(
+    warns = mdhtml2docx(
         '<p>before</p>\n'
         '<script type="application/vnd.mdhtml.raw" data-format="docx"><w:p><w:r><w:br w:type="page"/></w:r></w:p></script>\n'
         '<p>a <script type="application/vnd.mdhtml.raw" data-format="docx" data-encoding="html">&lt;w:r&gt;&lt;w:t&gt;RAW&lt;/w:t&gt;&lt;/w:r&gt;</script> b</p>\n'
@@ -275,17 +275,17 @@ def test_raw_docx(tmp_path):
     md = pandoc(out)
     for s in ('a RAW b', 'B64'): tt(s, md, in_)
     assert 'newpage' not in doc  # unrecognized format dropped
-    warns = convert('<script type="application/vnd.mdhtml.raw" data-format="docx"><w:oops></script>', out)
+    warns = mdhtml2docx('<script type="application/vnd.mdhtml.raw" data-format="docx"><w:oops></script>', out)
     teq(len(warns), 1)
     tt('malformed', warns[0], in_)
-    warns = convert('<script type="application/vnd.mdhtml.raw" data-format="docx" data-encoding="base64">!!!</script>', out)
+    warns = mdhtml2docx('<script type="application/vnd.mdhtml.raw" data-format="docx" data-encoding="base64">!!!</script>', out)
     teq(len(warns), 1)
     tt('malformed base64', warns[0], in_)
 
 
 def test_xrefs(tmp_path):
     out = tmp_path/'t.docx'
-    warns = convert(
+    warns = mdhtml2docx(
         '<h1 id="sec-intro">Intro</h1>\n<h2 id="sec-pay">Payment terms</h2>\n'
         '<p>See <a href="#sec-pay" data-ref=""></a> and <a href="#sec-intro" data-ref="bare"></a>, '
         'per <a href="#sec-pay" data-ref="">Clause</a>, also '
@@ -302,15 +302,15 @@ def test_xrefs(tmp_path):
     for s in ('lowerLetter', '(%2)', 'Heading1'): tt(s, num, in_)
     tt('updateFields', zipfile.ZipFile(out).read('word/settings.xml').decode(), in_)
     tt('w:numPr', zipfile.ZipFile(out).read('word/styles.xml').decode(), in_)
-    tfail(lambda: convert('<p><a href="#nope" data-ref=""></a></p>', out), contains='#nope')
-    tfail(lambda: convert('<p id="z-a"><a href="#z-a" data-ref=""></a></p>', out),
+    tfail(lambda: mdhtml2docx('<p><a href="#nope" data-ref=""></a></p>', out), contains='#nope')
+    tfail(lambda: mdhtml2docx('<p id="z-a"><a href="#z-a" data-ref=""></a></p>', out),
         contains="reference type 'z'")
-    tfail(lambda: convert('<p><a href="#sec-pay" data-ref="page text"></a></p>', out), contains='conflicting data-ref')
+    tfail(lambda: mdhtml2docx('<p><a href="#sec-pay" data-ref="page text"></a></p>', out), contains='conflicting data-ref')
 
 
 def test_text_targets(tmp_path):
     out = tmp_path/'t.docx'
-    warns = convert(
+    warns = mdhtml2docx(
         '<h1 id="sec-d">Defs</h1>\n'
         '<dl><dt id="def-term"><strong>"Term"</strong></dt><dt id="def-ap">Agreement Period</dt>'
         '<dd>the deal period</dd></dl>\n'
@@ -326,9 +326,9 @@ def test_text_targets(tmp_path):
 def test_xrefs_numbered_reference_doc(tmp_path):
     "A numbered docx (made by us) as reference: numbering merges with list numbering, no reinjection"
     ref = tmp_path/'ref.docx'
-    convert('<h1 id="a">A</h1>', ref, number_headings='legal')
+    mdhtml2docx('<h1 id="a">A</h1>', ref, number_headings='legal')
     out = tmp_path/'t.docx'
-    warns = convert('<h1 id="sec-a">A</h1>\n<ul>\n<li>one</li>\n</ul>\n'
+    warns = mdhtml2docx('<h1 id="sec-a">A</h1>\n<ul>\n<li>one</li>\n</ul>\n'
         '<p>See <a href="#sec-a" data-ref=""></a>.</p>', out, reference=ref)
     teq(warns, [])
     teq(fast_checks(out), 'valid')
@@ -351,7 +351,7 @@ def test_xml_contributor(tmp_path):
         '<w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>'
         '</w:style></w:styles>')
     out = tmp_path/'t.docx'
-    warns = convert('<p custom-style="Fancy">Hi</p>\n<ul>\n<li>one</li>\n</ul>', out,
+    warns = mdhtml2docx('<p custom-style="Fancy">Hi</p>\n<ul>\n<li>one</li>\n</ul>', out,
         reference=[None, xml])
     teq(warns, [])
     teq(fast_checks(out), 'valid')
@@ -365,7 +365,7 @@ def test_caption_refs(tmp_path):
     "Figures and captioned tables: SEQ-numbered captions, label+number bookmarks, fig/tbl refs"
     out = tmp_path/'t.docx'
     img = Path(__file__).parent/'fixtures'/'tiny.png'
-    warns = convert(
+    warns = mdhtml2docx(
         f'<figure id="fig-plot" class="wide"><img src="{img}" alt=""><figcaption>A plot</figcaption></figure>\n'
         '<table id="tbl-r"><caption>Results <em>now</em></caption><thead><tr><th>a</th></tr></thead>'
         '<tbody><tr><td>1</td></tr></tbody></table>\n'
@@ -382,17 +382,17 @@ def test_caption_refs(tmp_path):
     md = pandoc(out)
     tt('A plot', md, in_)
     # a ref to an id that never becomes a bookmark is an error, not a dud field
-    tfail(lambda: convert('<div id="d-x"><p>hi</p></div><p><a href="#d-x" data-ref=""></a></p>', out),
+    tfail(lambda: mdhtml2docx('<div id="d-x"><p>hi</p></div><p><a href="#d-x" data-ref=""></a></p>', out),
         contains='#d-x')
 
 
 def test_template_tokens(tmp_path):
     out = tmp_path/'t.docx'
-    src = to_mdhtml('Pay {{sal}} to {{name}}.\n\n{{#opt}}\n\nGranted.\n\n{{/opt}}\n', templates=MUSTACHE)
-    convert(src, out)                                    # default: vars dropped, markers literal
+    src = md2mdhtml('Pay {{sal}} to {{name}}.\n\n{{#opt}}\n\nGranted.\n\n{{/opt}}\n', templates=MUSTACHE)
+    mdhtml2docx(src, out)                                    # default: vars dropped, markers literal
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     assert 'sal' not in doc and '{{' not in doc and '«#opt»' in doc   # vars dropped; markers stay visible
-    warns = convert(src, out, tmpl=mustache_fields)
+    warns = mdhtml2docx(src, out, tmpl=mustache_fields)
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     assert 'MERGEFIELD sal' in doc and 'MERGEFIELD name' in doc
     assert '«#opt»' in doc and '«/opt»' in doc          # markers: converter-rendered literals, own paragraphs
@@ -401,7 +401,7 @@ def test_template_tokens(tmp_path):
 
 def test_table_custom_style(tmp_path):
     out = tmp_path/'t.docx'
-    convert(to_mdhtml('| A |\n|---|\n| b |\n{: custom-style="Borderless Table"}\n\n| C |\n|---|\n| d |\n'), out)
+    mdhtml2docx(md2mdhtml('| A |\n|---|\n| b |\n{: custom-style="Borderless Table"}\n\n| C |\n|---|\n| d |\n'), out)
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     tt('<w:tblStyle w:val="BorderlessTable"/>', doc, in_)          # styled table picks the reference style
     tt('<w:tblStyle w:val="TableGrid"/>', doc, in_)                # plain table keeps the default
@@ -411,9 +411,9 @@ def test_table_custom_style(tmp_path):
 
 
 def test_template_controls(tmp_path):
-    def controls(node): return 'control', node['name']
+    def controls(node): return 'control', node['value']
     out = tmp_path/'t.docx'
-    convert(to_mdhtml('Pay {{sal}} to {{name}}.\n\n{{#opt}}\n', templates=MUSTACHE), out, tmpl=controls)
+    mdhtml2docx(md2mdhtml('Pay {{sal}} to {{name}}.\n\n{{#opt}}\n', templates=MUSTACHE), out, tmpl=controls)
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
     assert doc.count('<w:sdt>') == 2 and 'w:val="sal"' in doc and 'w:val="name"' in doc
     assert doc.count('<w:showingPlcHdr/>') == 2 and 'w:val="PlaceholderText"' in doc
@@ -424,9 +424,9 @@ def test_template_controls(tmp_path):
 
 
 def test_template_bound(tmp_path):
-    def bound(node): return 'bound', node['name']
+    def bound(node): return 'bound', node['value']
     out = tmp_path/'t.docx'
-    convert(to_mdhtml('Pay {{sal}} to {{sal}} and {{name}}.\n', templates=MUSTACHE), out, tmpl=bound)
+    mdhtml2docx(md2mdhtml('Pay {{sal}} to {{sal}} and {{name}}.\n', templates=MUSTACHE), out, tmpl=bound)
     z = zipfile.ZipFile(out)
     doc = z.read('word/document.xml').decode()
     assert doc.count('<w:dataBinding ') == 3 and doc.count('/ns0:fields[1]/ns0:sal[1]') == 2
@@ -439,7 +439,7 @@ def test_template_bound(tmp_path):
 
 def test_details_degrades_to_bold_label(tmp_path):
     out = tmp_path/'t.docx'
-    warns = convert(to_mdhtml('::: {.details .tool-usage-details}\n## the label\n\nbody text\n:::\n'), out)
+    warns = mdhtml2docx(md2mdhtml('::: {.details .tool-usage-details}\n## the label\n\nbody text\n:::\n'), out)
     assert not warns
     md = pandoc(out)
     tt('**the label**', md, in_)

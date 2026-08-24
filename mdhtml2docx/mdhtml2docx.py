@@ -9,7 +9,7 @@ from copy import deepcopy
 from pathlib import Path
 from fast5ever import Comment, Element, Node, Text
 from lxml import etree
-from mdhtml import parse_mdhtml
+from mdhtml import mdhtml2dom
 from mdhtml.export import REFTYPES, SCHEMES, decode_raw, tmpl_node, group_plan, ref_tokens, ref_variant, target_kind, Resolver
 from .styles import STYLE_MAP, style_id, theme_styles
 from .styles import ref_path as _refpath
@@ -17,7 +17,7 @@ from .wml import *
 from .wml import qn
 from .hilite import segments, tokenize
 
-__all__ = ['convert', 'mustache_fields']
+__all__ = ['mdhtml2docx', 'mustache_fields']
 
 def _sid(key): return style_id(STYLE_MAP[key])
 
@@ -38,7 +38,7 @@ def parse_frag(src):
     "Parse an MDHTML body fragment, or return an existing mutable fragment"
     if isinstance(src, Node): return src
     if not isinstance(src, str): raise TypeError('input must be an MDHTML string or fast5ever node')
-    return parse_mdhtml(src)
+    return mdhtml2dom(src)
 
 class Converter:
     def __init__(self, reference=None, base=None, reftypes=None, number_headings=None, tmpl=None):
@@ -604,13 +604,17 @@ class Converter:
     BIND_ID = '{8E2C9A44-7D31-4E5B-9C0D-1A6F2B3C4D5E}'   # fixed datastore id, so builds are reproducible
 
     def tmpl_runs(self, el, fmt, form):
-        """Template-token runs. Range markers and unknown tokens are converter policy: literal
-        `«body»` runs, so an unfilled form shows its markers. Var tokens go through the `tmpl`
-        callable with the token node dict (see `mdhtml.export.tmpl_node`): str is a literal text
+        """Template-instruction runs. Non-value Mustache operations are converter policy: literal
+        marker runs, so an unfilled form shows its structure. Value operations go through the `tmpl`
+        callable with the semantic node dict (see `mdhtml.export.tmpl_node`): str is a literal text
         run, ('field', instr) a live field, ('control', name) an interactive plain-text content
         control, ('bound', name) a data-bound one, None dropped"""
+        if 'data-op' not in el.attrs: return []
         node = tmpl_node(el, form)
-        if node["kind"] != "var": return self.text_runs(f'«{node["body"].strip()}»', fmt)
+        action = node['op'].rsplit(':', 1)[-1]
+        if action != 'value':
+            marker = dict(section='#', inverted='^', end='/').get(action, '')
+            return self.text_runs(f'«{marker}{node["value"]}»', fmt)
         if self.tmpl is None: return []
         res = self.tmpl(node)
         if res is None: return []
@@ -618,7 +622,7 @@ class Converter:
         kind, val = res
         if kind == 'field':
             self.has_fields = True
-            return [E('w:fldSimple', {'w:instr': f' {val.strip()} '}, E('w:r', self.rpr(fmt), E('w:t', f'«{node["name"]}»')))]
+            return [E('w:fldSimple', {'w:instr': f' {val.strip()} '}, E('w:r', self.rpr(fmt), E('w:t', f'«{node["value"]}»')))]
         if kind in ('control', 'bound'):
             self.has_controls = True
             sdtpr = E('w:sdtPr', E('w:alias', {'w:val': val}), E('w:tag', {'w:val': val}), E('w:showingPlcHdr'))
@@ -903,11 +907,11 @@ class Converter:
 
 def mustache_fields(node):
     "Template variables as live Word `MERGEFIELD`s (markers never reach `tmpl`: the converter shows them literally)"
-    return 'field', f'MERGEFIELD {node["name"]}'
+    return 'field', f'MERGEFIELD {node["value"]}'
 
 
 
-def convert(mdhtml, dest, reference=None, base=None, reftypes=None, number_headings=None, tmpl=None):
+def mdhtml2docx(mdhtml, dest, reference=None, base=None, reftypes=None, number_headings=None, tmpl=None):
     """Convert an MDHTML string or mutable fast5ever DOM to a docx file at `dest`; returns warnings.
     `reference` is a reference docx path, or a list of them: the first supplies the whole archive
     (default, or when None: the built-in template), later entries contribute styles only, later-wins -
@@ -917,9 +921,9 @@ def convert(mdhtml, dest, reference=None, base=None, reftypes=None, number_headi
     resolve against `base` ('.'). Cross-references (`data-ref` anchors from Markdown `[@sec-x]`) become
     live REF fields; `reftypes` maps type tokens to (singular, plural) prefix words beyond the built-in
     `sec`, and `number_headings` (a styles.SCHEMES name such as 'legal', or a {lvlText: numFmt} dict, one entry per heading level)
-    numbers the headings via a multilevel list so `\\w` fields resolve. Template tokens are dropped
-    unless `tmpl` is given: a callable taking the token node dict (`mdhtml.export.tmpl_node`: `body`,
-    `syntax`, `form`, `kind`, `name`, `inverted`) and returning a str for a literal text run,
+    numbers the headings via a multilevel list so `\\w` fields resolve. Template value instructions are dropped
+    unless `tmpl` is given; other operations remain visible markers. `tmpl` is a callable taking the semantic instruction dict
+    (`mdhtml.export.tmpl_node`: `op`, `value`, `form`) and returning a str for a literal text run,
     `('field', instr)` for a live field, `('control', name)` for an interactive plain-text content
     control, `('bound', name)` for a content control data-bound to a shared per-variable XML node
     (same-name controls stay in sync as one is filled), or None to drop; range markers never reach `tmpl` and render as literal «body» runs - `mustache_fields` here

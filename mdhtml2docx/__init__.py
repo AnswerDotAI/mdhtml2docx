@@ -3,4 +3,4 @@ __version__ = "0.1.3"
 
 
 
-from .convert import convert
+from .mdhtml2docx import mdhtml2docx
