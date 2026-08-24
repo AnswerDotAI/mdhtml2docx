@@ -9,21 +9,21 @@ MDHTML accepts the full HTML vocabulary. This exporter supports the portable ele
 ## Usage
 
 ```python
-from mdhtml import to_mdhtml
-from mdhtml2docx import convert
+from mdhtml import md2mdhtml
+from mdhtml2docx import mdhtml2docx
 
-html = to_mdhtml(markdown_text)
-warnings = convert(html, 'out.docx')
+html = md2mdhtml(markdown_text)
+warnings = mdhtml2docx(html, 'out.docx')
 ```
 
-`convert` takes an MDHTML string, writes a docx, and returns a list of warning strings. It parses strings with `mdhtml.parse_mdhtml`, so normal HTML5 repair applies and XML well-formedness is irrelevant. It also accepts an existing mutable fast5ever DOM:
+`mdhtml2docx` takes an MDHTML string, writes a docx, and returns a list of warning strings. It parses strings with `mdhtml.mdhtml2dom`, so normal HTML5 repair applies and XML well-formedness is irrelevant. It also accepts an existing mutable fast5ever DOM:
 
 ```python
-from mdhtml import parse_mdhtml
+from mdhtml import mdhtml2dom
 
-document = parse_mdhtml(html)
+document = mdhtml2dom(html)
 document.children[0].attrs['custom-style'] = 'Contract Title'
-warnings = convert(document, 'out.docx')
+warnings = mdhtml2docx(document, 'out.docx')
 ```
 
 Body-position text and phrasing content become implicit Word paragraphs. Whitespace between blocks remains inert. HTML templates remain inert and are not rendered.
@@ -68,7 +68,7 @@ The word before the number comes from the reference's type, the id up to its fir
 
 Number fields need numbered headings. If your reference docx already numbers its heading styles (most firm templates do), nothing more is required, and the converter leaves that numbering alone. Otherwise pass `number_headings='legal'` for 1. / (a) / (i) numbering or `'decimal'` for 1 / 1.1 / 1.1.1 (the names index `styles.SCHEMES`), or pass your own scheme as a `{lvlText: numFmt}` dict, one entry per heading level. A reference-list entry ending in `.xml` is a third route: a raw file of `w:style`, `w:abstractNum`, and `w:num` elements contributing styles and numbering together, with ids remapped to avoid collisions.
 
-Figures and captioned tables number themselves with SEQ fields: a figure renders as its image plus a "Figure 1: caption" paragraph below (caption style), a table caption as "Table 1: caption" above the table, both live. When the element has an id, the label-and-number span is bookmarked, so `[@fig-plot]` inserts a live "Figure 1" (no extra prefix word; the label is part of the bookmarked text) and `[-@tbl-stages]` the bare number via a second number-only bookmark. `fig` and `tbl` are built-in reftypes alongside `sec`, and their label words come from the same table. Mixed-type groups render each item with its own singular prefix ("Figure 1 and Table 2"); same-type groups pluralize once. Reference targets must be things that get bookmarks - headings, paragraphs, figures, and tables with ids - and a ref to anything else is an error at convert time.
+Figures and captioned tables number themselves with SEQ fields: a figure renders as its image plus a "Figure 1: caption" paragraph below (caption style), a table caption as "Table 1: caption" above the table, both live. When the element has an id, the label-and-number span is bookmarked, so `[@fig-plot]` inserts a live "Figure 1" (no extra prefix word; the label is part of the bookmarked text) and `[-@tbl-stages]` the bare number via a second number-only bookmark. `fig` and `tbl` are built-in reftypes alongside `sec`, and their label words come from the same table. Mixed-type groups render each item with its own singular prefix ("Figure 1 and Table 2"); same-type groups pluralize once. Reference targets must be things that get bookmarks - headings, paragraphs, figures, and tables with ids - and a ref to anything else is an error at conversion time.
 
 ## Validation
 

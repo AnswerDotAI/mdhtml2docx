@@ -1,7 +1,7 @@
 """WordprocessingML construction helpers: namespaces, a qualified-name element builder, unit
 conversions, and the colwidths track-list parser. Child-element order inside w:pPr/w:rPr/w:tcPr
 etc follows the ECMA-376 content models; builders here emit children in the order callers pass
-them, so callers are responsible for schema order (the convert module's helpers encode it)."""
+them, so callers are responsible for schema order (the mdhtml2docx module's helpers encode it)."""
 import re, struct
 from xml.sax.saxutils import escape
 from lxml import etree
