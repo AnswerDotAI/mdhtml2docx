@@ -91,12 +91,10 @@ def test_lists(tmp_path):
 
 
 def test_default_reference():
-    "The bundled reference carries the house look: TNR 11 defaults, justified prose, Title and Centered styles, a page-number footer"
+    "The bundled reference defines the Title and Centered styles and keeps an empty footer wired for page numbers"
     z = zipfile.ZipFile(ref_path())
     styles = z.read('word/styles.xml').decode()
-    for s in ('w:styleId="Title"', 'w:styleId="Centered"', 'Times New Roman'): tt(s, styles, in_)
-    tt('w:val="both"', re.search(r'<w:style [^>]*w:styleId="Normal".*?</w:style>', styles, re.S).group(0), in_)
-    tt(' PAGE ', z.read('word/footer.xml').decode(), in_)
+    for s in ('w:styleId="Title"', 'w:styleId="Centered"'): tt(s, styles, in_)
     tt('footer.xml', z.read('word/_rels/document.xml.rels').decode(), in_)
     tt('footerReference', z.read('word/document.xml').decode(), in_)
 
@@ -104,7 +102,7 @@ def test_default_reference():
 def test_h1_is_title(tmp_path):
     "h1 is the document title: Title style, unnumbered; number_headings schemes bind from h2 (Heading1)"
     out = tmp_path/'t.docx'
-    warns = convert('<h1 id="ttl">EXHIBIT A: Assignment Agreement</h1>\n<h2 id="sec-conf">Confidentiality</h2>\n'
+    warns = mdhtml2docx('<h1 id="ttl">EXHIBIT A: Assignment Agreement</h1>\n<h2 id="sec-conf">Confidentiality</h2>\n'
         '<h3>Confidential Information</h3>\n'
         '<p>See <a href="#sec-conf" data-ref=""></a> and <a href="#ttl" data-ref="bare text"></a>.</p>', out, number_headings='legal')
     teq(warns, [])

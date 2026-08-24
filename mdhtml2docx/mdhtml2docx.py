@@ -728,8 +728,7 @@ class Converter:
                 an.append(E('w:lvl', {'w:ilvl': i},  # chkstyle: ignore-node
                     E('w:start', {'w:val': 1}), E('w:numFmt', {'w:val': fmt}),
                     E('w:pStyle', {'w:val': f'Heading{i + 1}'}) if i < 6 else None,
-                    E('w:lvlText', {'w:val': txt}), E('w:lvlJc', {'w:val': 'left'}),
-                    E('w:pPr', E('w:ind', {'w:left': 360 + 360 * i, 'w:hanging': 360 + 360 * i}))))   # number at the margin, text stair-stepped per level
+                    E('w:lvlText', {'w:val': txt}), E('w:lvlJc', {'w:val': 'left'})))
             root.append(an)
         for e in self.xabs: root.append(e)
         for e in tnums: root.append(e)
