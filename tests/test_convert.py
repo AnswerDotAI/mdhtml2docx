@@ -113,6 +113,30 @@ def test_tables(tmp_path):
         '<w:gridSpan w:val="2"/>'): tt(s, doc, in_)   # colspan encoded
 
 
+def test_br_page(tmp_path):
+    out = tmp_path/'t.docx'
+    warns = mdhtml2docx(md2mdhtml('The Signature Page follows.<br type="page">\n\nNext page text.\n\nplain<br>break'), out)
+    teq(warns, [])
+    teq(fast_checks(out), 'valid')
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    # the page break rides inside the marker's own paragraph, so it never needs a line of its own
+    assert doc.index('follows.') < doc.index('<w:br w:type="page"/>') < doc.index('Next page text.')
+    teq(doc.count('<w:br w:type="page"/>'), 1)
+    teq(doc.count('<w:br/>'), 1)   # a plain <br> stays a plain line break
+
+
+def test_table_empty_header(tmp_path):
+    out = tmp_path/'t.docx'
+    warns = mdhtml2docx(md2mdhtml('|  |  |\n|---|---|\n| **A:** | one |\n| **B:** | two |'), out)
+    teq(warns, [])
+    teq(fast_checks(out), 'valid')
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    teq('<w:tblHeader/>' in doc, False)   # the all-empty thead is dropped, not rendered as a blank row
+    teq(doc.count('<w:tr>'), 2)           # only the two body rows remain
+    md = pandoc(out)
+    for s in ('A:', 'one', 'B:', 'two'): tt(s, md, in_)
+
+
 def test_more_features(tmp_path):
     out = tmp_path/'t.docx'
     img = Path(__file__).parent/'fixtures'/'tiny.png'

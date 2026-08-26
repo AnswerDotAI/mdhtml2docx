@@ -324,7 +324,7 @@ class Converter:
             out = fn if fn is not None else self.runs(el, fmt | {'vert': 'superscript'})
         elif tag == 'span': out = self.span(el, fmt)
         elif tag == 'img': out = self.image(el, fmt)
-        elif tag == 'br': out = [E('w:r', self.rpr(fmt), E('w:br'))]
+        elif tag == 'br': out = [E('w:r', self.rpr(fmt), E('w:br', {'w:type': 'page'} if _get(el, 'type') == 'page' else None))]
         elif tag == 'input':   # task-list checkbox
             if _get(el, 'type') != 'checkbox':
                 self.warn(f'unhandled inline <input type={_get(el, "type")!r}>; dropped')
@@ -479,6 +479,11 @@ class Converter:
             elif t in ('tbody', 'tfoot'):
                 for c in _els(sec): _add(c)
             elif t in ('tr', 'template'): _add(sec)
+        if nhead and not any(tr.to_text().strip() for tr in rows[:nhead]):
+            # a markdown pipe table cannot omit its header row, so an all-empty thead means "headerless"
+            old, markers = markers, {}
+            for ri, ms in old.items(): markers.setdefault(max(0, ri - nhead), []).extend(ms)
+            rows, nhead = rows[nhead:], 0
         placed, ncols = self.table_grid(rows)
         dxa, all_fr = self.col_widths(el, ncols)
         def _tcw(ci, cs):
