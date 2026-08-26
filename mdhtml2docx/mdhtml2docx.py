@@ -525,7 +525,7 @@ class Converter:
             trs.append(E('w:tr', E('w:trPr', E('w:tblHeader')) if ri < nhead else None, *tcs))
         for mel in markers.get(len(rows), []): trs.append(_marker_tr(mel))
         out = self.caption_para(el, 'tbl', cap)
-        return out + [E('w:tbl', tblpr, grid, *trs)]
+        return out + [E('w:tbl', tblpr, grid, *trs), E('w:p')]
 
     def caption_para(self, el, typ, capel, fmt={}):
         """Numbered caption paragraph: 'Label N: text' with a SEQ field as N. When `el` has an id, the
@@ -697,18 +697,11 @@ class Converter:
         return out
 
     # ---- assembly -----------------------------------------------------------
-    def _separate_tables(self, body):
-        "A paragraph between adjacent tables (Word merges them otherwise) and after a trailing one (a body must end in a paragraph)"
-        for tbl in body.findall(qn('w:tbl')):
-            nxt = tbl.getnext()
-            if nxt is None or etree.QName(nxt).localname == 'tbl': tbl.addnext(E('w:p'))
-
     def document(self, body_blocks):
         "word/document.xml bytes: our blocks + the template's sectPr"
         root = etree.Element(qn('w:document'), nsmap=NS)
         body = etree.SubElement(root, qn('w:body'))
         for b in body_blocks: body.append(b)
-        self._separate_tables(body)
         body.append(self.sectpr)
         return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
