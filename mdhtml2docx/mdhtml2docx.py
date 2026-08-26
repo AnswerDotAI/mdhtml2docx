@@ -479,6 +479,11 @@ class Converter:
             elif t in ('tbody', 'tfoot'):
                 for c in _els(sec): _add(c)
             elif t in ('tr', 'template'): _add(sec)
+        if nhead and not any(tr.to_text().strip() for tr in rows[:nhead]):
+            # a markdown pipe table cannot omit its header row, so an all-empty thead means "headerless"
+            old, markers = markers, {}
+            for ri, ms in old.items(): markers.setdefault(max(0, ri - nhead), []).extend(ms)
+            rows, nhead = rows[nhead:], 0
         placed, ncols = self.table_grid(rows)
         dxa, all_fr = self.col_widths(el, ncols)
         def _tcw(ci, cs):
@@ -520,7 +525,7 @@ class Converter:
             trs.append(E('w:tr', E('w:trPr', E('w:tblHeader')) if ri < nhead else None, *tcs))
         for mel in markers.get(len(rows), []): trs.append(_marker_tr(mel))
         out = self.caption_para(el, 'tbl', cap)
-        return out + [E('w:tbl', tblpr, grid, *trs), E('w:p')]
+        return out + [E('w:tbl', tblpr, grid, *trs)]
 
     def caption_para(self, el, typ, capel, fmt={}):
         """Numbered caption paragraph: 'Label N: text' with a SEQ field as N. When `el` has an id, the
@@ -692,11 +697,41 @@ class Converter:
         return out
 
     # ---- assembly -----------------------------------------------------------
+    def _is_pgbrk(self, el):
+        "A paragraph whose only content is a single page-break run"
+        if etree.QName(el).localname != 'p': return False
+        kids = [c for c in el if etree.QName(c).localname != 'pPr']
+        return (len(kids) == 1 and etree.QName(kids[0]).localname == 'r'
+            and [etree.QName(c).localname for c in kids[0]] == ['br'] and kids[0][0].get(qn('w:type')) == 'page')
+
+    PPR_PRE_PGBRK = {'pStyle', 'keepNext', 'keepLines'}
+
+    def _fold_pagebreaks(self, body):
+        "Fold each break-only paragraph into the next paragraph's pageBreakBefore: a standalone break paragraph needs a line of its own, so after a full page it produces a blank page"
+        for p in [c for c in body if self._is_pgbrk(c)]:
+            nxt = p.getnext()
+            if nxt is None or etree.QName(nxt).localname != 'p' or self._is_pgbrk(nxt): continue
+            ppr = nxt.find(qn('w:pPr'))
+            if ppr is None:
+                ppr = etree.Element(qn('w:pPr'))
+                nxt.insert(0, ppr)
+            pos = next((j for j, c in enumerate(ppr) if etree.QName(c).localname not in self.PPR_PRE_PGBRK), len(ppr))
+            ppr.insert(pos, E('w:pageBreakBefore'))
+            body.remove(p)
+
+    def _separate_tables(self, body):
+        "A paragraph between adjacent tables (Word merges them otherwise) and after a trailing one (a body must end in a paragraph)"
+        for tbl in body.findall(qn('w:tbl')):
+            nxt = tbl.getnext()
+            if nxt is None or etree.QName(nxt).localname == 'tbl': tbl.addnext(E('w:p'))
+
     def document(self, body_blocks):
         "word/document.xml bytes: our blocks + the template's sectPr"
         root = etree.Element(qn('w:document'), nsmap=NS)
         body = etree.SubElement(root, qn('w:body'))
         for b in body_blocks: body.append(b)
+        self._fold_pagebreaks(body)
+        self._separate_tables(body)
         body.append(self.sectpr)
         return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 

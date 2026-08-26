@@ -113,6 +113,29 @@ def test_tables(tmp_path):
         '<w:gridSpan w:val="2"/>'): tt(s, doc, in_)   # colspan encoded
 
 
+def test_pagebreak_folding(tmp_path):
+    out = tmp_path/'t.docx'
+    raw = '<script type="application/vnd.mdhtml.raw" data-format="docx"><w:p><w:r><w:br w:type="page"/></w:r></w:p></script>'
+    warns = mdhtml2docx(f'<p>a</p>\n{raw}\n<p>b</p>\n{raw}', out)
+    teq(warns, [])
+    teq(fast_checks(out), 'valid')
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    teq(doc.count('<w:pageBreakBefore/>'), 1)   # folded into b's pPr
+    teq(doc.count('<w:br w:type="page"/>'), 1)  # the trailing break has no paragraph to carry it, so it stays
+
+
+def test_table_empty_header(tmp_path):
+    out = tmp_path/'t.docx'
+    warns = mdhtml2docx(md2mdhtml('|  |  |\n|---|---|\n| **A:** | one |\n| **B:** | two |'), out)
+    teq(warns, [])
+    teq(fast_checks(out), 'valid')
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    teq('<w:tblHeader/>' in doc, False)   # the all-empty thead is dropped, not rendered as a blank row
+    teq(doc.count('<w:tr>'), 2)           # only the two body rows remain
+    md = pandoc(out)
+    for s in ('A:', 'one', 'B:', 'two'): tt(s, md, in_)
+
+
 def test_more_features(tmp_path):
     out = tmp_path/'t.docx'
     img = Path(__file__).parent/'fixtures'/'tiny.png'
@@ -271,7 +294,7 @@ def test_raw_docx(tmp_path):
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
-    tt('<w:br w:type="page"/>', doc, in_)
+    tt('<w:pageBreakBefore/>', doc, in_)   # the break-only raw paragraph folds into the next paragraph
     md = pandoc(out)
     for s in ('a RAW b', 'B64'): tt(s, md, in_)
     assert 'newpage' not in doc  # unrecognized format dropped
