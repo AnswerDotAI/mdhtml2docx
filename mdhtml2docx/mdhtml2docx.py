@@ -324,7 +324,7 @@ class Converter:
             out = fn if fn is not None else self.runs(el, fmt | {'vert': 'superscript'})
         elif tag == 'span': out = self.span(el, fmt)
         elif tag == 'img': out = self.image(el, fmt)
-        elif tag == 'br': out = [E('w:r', self.rpr(fmt), E('w:br'))]
+        elif tag == 'br': out = [E('w:r', self.rpr(fmt), E('w:br', {'w:type': 'page'} if _get(el, 'type') == 'page' else None))]
         elif tag == 'input':   # task-list checkbox
             if _get(el, 'type') != 'checkbox':
                 self.warn(f'unhandled inline <input type={_get(el, "type")!r}>; dropped')
@@ -697,28 +697,6 @@ class Converter:
         return out
 
     # ---- assembly -----------------------------------------------------------
-    def _is_pgbrk(self, el):
-        "A paragraph whose only content is a single page-break run"
-        if etree.QName(el).localname != 'p': return False
-        kids = [c for c in el if etree.QName(c).localname != 'pPr']
-        return (len(kids) == 1 and etree.QName(kids[0]).localname == 'r'
-            and [etree.QName(c).localname for c in kids[0]] == ['br'] and kids[0][0].get(qn('w:type')) == 'page')
-
-    PPR_PRE_PGBRK = {'pStyle', 'keepNext', 'keepLines'}
-
-    def _fold_pagebreaks(self, body):
-        "Fold each break-only paragraph into the next paragraph's pageBreakBefore: a standalone break paragraph needs a line of its own, so after a full page it produces a blank page"
-        for p in [c for c in body if self._is_pgbrk(c)]:
-            nxt = p.getnext()
-            if nxt is None or etree.QName(nxt).localname != 'p' or self._is_pgbrk(nxt): continue
-            ppr = nxt.find(qn('w:pPr'))
-            if ppr is None:
-                ppr = etree.Element(qn('w:pPr'))
-                nxt.insert(0, ppr)
-            pos = next((j for j, c in enumerate(ppr) if etree.QName(c).localname not in self.PPR_PRE_PGBRK), len(ppr))
-            ppr.insert(pos, E('w:pageBreakBefore'))
-            body.remove(p)
-
     def _separate_tables(self, body):
         "A paragraph between adjacent tables (Word merges them otherwise) and after a trailing one (a body must end in a paragraph)"
         for tbl in body.findall(qn('w:tbl')):
@@ -730,7 +708,6 @@ class Converter:
         root = etree.Element(qn('w:document'), nsmap=NS)
         body = etree.SubElement(root, qn('w:body'))
         for b in body_blocks: body.append(b)
-        self._fold_pagebreaks(body)
         self._separate_tables(body)
         body.append(self.sectpr)
         return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)

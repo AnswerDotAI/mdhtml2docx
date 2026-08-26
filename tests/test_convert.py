@@ -113,15 +113,16 @@ def test_tables(tmp_path):
         '<w:gridSpan w:val="2"/>'): tt(s, doc, in_)   # colspan encoded
 
 
-def test_pagebreak_folding(tmp_path):
+def test_br_page(tmp_path):
     out = tmp_path/'t.docx'
-    raw = '<script type="application/vnd.mdhtml.raw" data-format="docx"><w:p><w:r><w:br w:type="page"/></w:r></w:p></script>'
-    warns = mdhtml2docx(f'<p>a</p>\n{raw}\n<p>b</p>\n{raw}', out)
+    warns = mdhtml2docx(md2mdhtml('The Signature Page follows.<br type="page">\n\nNext page text.\n\nplain<br>break'), out)
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
-    teq(doc.count('<w:pageBreakBefore/>'), 1)   # folded into b's pPr
-    teq(doc.count('<w:br w:type="page"/>'), 1)  # the trailing break has no paragraph to carry it, so it stays
+    # the page break rides inside the marker's own paragraph, so it never needs a line of its own
+    assert doc.index('follows.') < doc.index('<w:br w:type="page"/>') < doc.index('Next page text.')
+    teq(doc.count('<w:br w:type="page"/>'), 1)
+    teq(doc.count('<w:br/>'), 1)   # a plain <br> stays a plain line break
 
 
 def test_table_empty_header(tmp_path):
@@ -294,7 +295,7 @@ def test_raw_docx(tmp_path):
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     doc = zipfile.ZipFile(out).read('word/document.xml').decode()
-    tt('<w:pageBreakBefore/>', doc, in_)   # the break-only raw paragraph folds into the next paragraph
+    tt('<w:br w:type="page"/>', doc, in_)
     md = pandoc(out)
     for s in ('a RAW b', 'B64'): tt(s, md, in_)
     assert 'newpage' not in doc  # unrecognized format dropped
