@@ -1,4 +1,4 @@
-import base64, pytest, subprocess, zipfile
+import base64, pytest, re, subprocess, zipfile
 from pathlib import Path
 
 from fastcore.test import test_eq as teq, test as tt, test_fail as tfail
@@ -9,6 +9,7 @@ from mdhtml.mustache import MUSTACHE
 from mdhtml.tools import SAMPLE_MD, sample_md
 from mdhtml2docx.mdhtml2docx import mdhtml2docx, mustache_fields
 from mdhtml2docx.validate import fast_checks
+from mdhtml2docx.styles import ref_path
 
 
 def pandoc(path, to='markdown'):
@@ -63,11 +64,11 @@ def test_basic_blocks(tmp_path):
     teq(warns, [])
     teq(fast_checks(out), 'valid')
     md = pandoc(out)
-    for s in ('# Title', '## Sub *title*', '`f(x)`', '[fast.ai](https://fast.ai/)',
+    for s in ('# Sub *title*', '`f(x)`', '[fast.ai](https://fast.ai/)',   # no '# Title': the h1 is Title style, which pandoc lifts to metadata (its bookmark still resolves below)
         '> Quoted line.', 'def f(x):', 'return x'): tt(s, md, in_)
-    # pandoc resolves the anchor against the heading bookmark and rewrites it to the heading's
-    # auto-identifier, so this line proves the internal link wiring survived the round trip
-    tt('[the title](#title)', md, in_)
+    # the internal link survived the round trip: pandoc keeps the raw bookmark anchor, since a
+    # Title-styled target is not a heading (heading targets get rewritten to auto-identifiers)
+    tt('[the title](#top)', md, in_)
 
 
 def test_lists(tmp_path):
@@ -88,6 +89,32 @@ def test_lists(tmp_path):
     tt('- [x] done', lines, in_)
     tt('- [ ] todo', lines, in_)
 
+
+def test_default_reference():
+    "The bundled reference defines the Title and Centered styles and keeps an empty footer wired for page numbers"
+    z = zipfile.ZipFile(ref_path())
+    styles = z.read('word/styles.xml').decode()
+    for s in ('w:styleId="Title"', 'w:styleId="Centered"'): tt(s, styles, in_)
+    tt('footer.xml', z.read('word/_rels/document.xml.rels').decode(), in_)
+    tt('footerReference', z.read('word/document.xml').decode(), in_)
+
+
+def test_h1_is_title(tmp_path):
+    "h1 is the document title: Title style, unnumbered; number_headings schemes bind from h2 (Heading1)"
+    out = tmp_path/'t.docx'
+    warns = mdhtml2docx('<h1 id="ttl">EXHIBIT A: Assignment Agreement</h1>\n<h2 id="sec-conf">Confidentiality</h2>\n'
+        '<h3>Confidential Information</h3>\n'
+        '<p>See <a href="#sec-conf" data-ref=""></a> and <a href="#ttl" data-ref="bare text"></a>.</p>', out, number_headings='legal')
+    teq(warns, [])
+    teq(fast_checks(out), 'valid')
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    for s in ('<w:pStyle w:val="Title"/>', '<w:pStyle w:val="Heading1"/>', '<w:pStyle w:val="Heading2"/>',
+        r'REF sec_conf \w \h', 'REF ttl \\h'): tt(s, doc, in_)
+    styles = zipfile.ZipFile(out).read('word/styles.xml').decode()
+    m = re.search(r'<w:style [^>]*w:styleId="Title".*?</w:style>', styles, re.S)
+    assert m and 'numPr' not in m.group(0)   # the title never joins the numbering
+    m = re.search(r'<w:style [^>]*w:styleId="Heading1".*?</w:style>', styles, re.S)
+    assert m and 'numPr' in m.group(0)       # the scheme's level 1 is markdown h2
 
 def test_tables(tmp_path):
     out = tmp_path/'t.docx'

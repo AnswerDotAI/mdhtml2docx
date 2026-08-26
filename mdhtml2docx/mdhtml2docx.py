@@ -926,7 +926,7 @@ def mdhtml2docx(mdhtml, dest, reference=None, base=None, reftypes=None, number_h
     resolve against `base` ('.'). Cross-references (`data-ref` anchors from Markdown `[@sec-x]`) become
     live REF fields; `reftypes` maps type tokens to (singular, plural) prefix words beyond the built-in
     `sec`, and `number_headings` (a styles.SCHEMES name such as 'legal', or a {lvlText: numFmt} dict, one entry per heading level)
-    numbers the headings via a multilevel list so `\\w` fields resolve. Template value instructions are dropped
+    numbers the headings via a multilevel list so `\\w` fields resolve; h1 is the unnumbered document title (Title style), so scheme level 1 is h2. Template value instructions are dropped
     unless `tmpl` is given; other operations remain visible markers. `tmpl` is a callable taking the semantic instruction dict
     (`mdhtml.export.tmpl_node`: `op`, `value`, `form`) and returning a str for a literal text run,
     `('field', instr)` for a live field, `('control', name)` for an interactive plain-text content
