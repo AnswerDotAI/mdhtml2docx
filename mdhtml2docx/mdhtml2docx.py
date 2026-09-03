@@ -24,6 +24,7 @@ def _sid(key): return style_id(STYLE_MAP[key])
 BLOCK_TAGS = set(('address article aside blockquote details dialog div dl fieldset figure footer form h1 h2 h3 h4 h5 h6 '
     'header hgroup hr main menu nav ol p pre search section table ul').split())
 INERT_TAGS = {'base', 'link', 'meta', 'style', 'template', 'title'}
+HEADING_STYLE_IDS = ['Title'] + [f'Heading{i}' for i in range(1, 6)]   # h1-h6, one per numbering level: the Title carries level 0
 
 def _tag(el): return el.name
 def _get(el, key, default=None): return el.attrs.get(key, default)
@@ -732,7 +733,8 @@ class Converter:
                 txt, fmt = self.scheme[i] if i < len(self.scheme) else (f'%{i+1}.', 'decimal')
                 an.append(E('w:lvl', {'w:ilvl': i},  # chkstyle: ignore-node
                     E('w:start', {'w:val': 1}), E('w:numFmt', {'w:val': fmt}),
-                    E('w:pStyle', {'w:val': f'Heading{i + 1}'}) if i < 6 else None,
+                    E('w:pStyle', {'w:val': HEADING_STYLE_IDS[i]}) if i < 6 else None,
+                    E('w:suff', {'w:val': 'nothing'}) if not txt else None,   # an empty number (the title's) takes no tab either
                     E('w:lvlText', {'w:val': txt}), E('w:lvlJc', {'w:val': 'left'})))
             root.append(an)
         for e in self.xabs: root.append(e)
@@ -818,10 +820,12 @@ class Converter:
     PPR_PRE_NUMPR = {'pStyle', 'keepNext', 'keepLines', 'pageBreakBefore', 'framePr', 'widowControl'}
 
     def _number_heading_styles(self):
-        "Patch w:numPr into Heading1-6 styles, binding them to the generated heading numbering"
-        for i in range(6):
-            st = self.sroot.find(f'{{{W}}}style[@{{{W}}}styleId="Heading{i + 1}"]')
-            if st is None: continue
+        "Patch w:numPr into the Title and Heading1-5 styles, binding them to the generated heading numbering; the Title's level 0 is what restarts the count at every h1"
+        for i, sid in enumerate(HEADING_STYLE_IDS):
+            st = self.sroot.find(f'{{{W}}}style[@{{{W}}}styleId="{sid}"]')
+            if st is None:
+                if i == 0: self.warn('no Title style in the reference: an h1 will not restart the heading numbering')
+                continue
             ppr = st.find(qn('w:pPr'))
             if ppr is None:
                 ppr = E('w:pPr')
@@ -926,7 +930,7 @@ def mdhtml2docx(mdhtml, dest, reference=None, base=None, reftypes=None, number_h
     resolve against `base` ('.'). Cross-references (`data-ref` anchors from Markdown `[@sec-x]`) become
     live REF fields; `reftypes` maps type tokens to (singular, plural) prefix words beyond the built-in
     `sec`, and `number_headings` (a styles.SCHEMES name such as 'legal', or a {lvlText: numFmt} dict, one entry per heading level)
-    numbers the headings via a multilevel list so `\\w` fields resolve; h1 is the unnumbered document title (Title style), so scheme level 1 is h2. Template value instructions are dropped
+    numbers the headings via a multilevel list so `\\w` fields resolve; scheme level 0 is the h1 document title (Title style), whose empty lvlText shows nothing and whose counter restarts the levels below. Template value instructions are dropped
     unless `tmpl` is given; other operations remain visible markers. `tmpl` is a callable taking the semantic instruction dict
     (`mdhtml.export.tmpl_node`: `op`, `value`, `form`) and returning a str for a literal text run,
     `('field', instr)` for a live field, `('control', name)` for an interactive plain-text content
