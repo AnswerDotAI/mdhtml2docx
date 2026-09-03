@@ -100,7 +100,7 @@ def test_default_reference():
 
 
 def test_h1_is_title(tmp_path):
-    "h1 is the document title: Title style, unnumbered; number_headings schemes bind from h2 (Heading1)"
+    "h1 is the document title: Title style, no visible number, and the invisible level 0 that restarts the scheme, which binds from h2 (Heading1)"
     out = tmp_path/'t.docx'
     warns = mdhtml2docx('<h1 id="ttl">EXHIBIT A: Assignment Agreement</h1>\n<h2 id="sec-conf">Confidentiality</h2>\n'
         '<h3>Confidential Information</h3>\n'
@@ -112,9 +112,28 @@ def test_h1_is_title(tmp_path):
         r'REF sec_conf \w \h', 'REF ttl \\h'): tt(s, doc, in_)
     styles = zipfile.ZipFile(out).read('word/styles.xml').decode()
     m = re.search(r'<w:style [^>]*w:styleId="Title".*?</w:style>', styles, re.S)
-    assert m and 'numPr' not in m.group(0)   # the title never joins the numbering
+    assert m and '<w:ilvl w:val="0"/>' in m.group(0)   # the title holds level 0: invisible, but it restarts the count
     m = re.search(r'<w:style [^>]*w:styleId="Heading1".*?</w:style>', styles, re.S)
-    assert m and 'numPr' in m.group(0)       # the scheme's level 1 is markdown h2
+    assert m and '<w:ilvl w:val="1"/>' in m.group(0)   # the scheme's first level is markdown h2
+    num = zipfile.ZipFile(out).read('word/numbering.xml').decode()
+    lvl0 = re.search(r'<w:lvl w:ilvl="0">.*?</w:lvl>', num, re.S).group(0)
+    for s in ('w:val="Title"', '<w:suff w:val="nothing"/>', '<w:lvlText w:val=""/>'): tt(s, lvl0, in_)
+    tt('<w:lvlText w:val="%2."/>', num, in_)   # legal's '%1.' shifted onto Word level 2 (h2)
+    tt('<w:lvlText w:val="(%3)"/>', num, in_)  # and '(%2)' onto level 3 (h3)
+
+
+def test_title_restarts_numbering(tmp_path):
+    "Two documents in one file: the second h1 sends the counters back to 1 through Word's own multilevel rule"
+    out = tmp_path/'t.docx'
+    warns = mdhtml2docx('<h1>T</h1><h2 id="sec-a">A</h2><h3 id="sec-b">B</h3><h1>T2</h1><h2 id="sec-c">C</h2><h3 id="sec-d">D</h3>'
+        '<p>See <a href="#sec-b" data-ref=""></a> and <a href="#sec-d" data-ref=""></a>.</p>', out, number_headings='decimal')
+    teq(warns, [])
+    teq(fast_checks(out), 'valid')
+    doc = zipfile.ZipFile(out).read('word/document.xml').decode()
+    teq(doc.count('<w:pStyle w:val="Title"/>'), 2)
+    for s in (r'REF sec_b \w \h', r'REF sec_d \w \h'): tt(s, doc, in_)   # numbers come from Word, one counter set, restarted by the Title level
+    num = zipfile.ZipFile(out).read('word/numbering.xml').decode()
+    for s in ('<w:lvlText w:val="%2."/>', '<w:lvlText w:val="%2.%3."/>'): tt(s, num, in_)   # decimal, shifted
 
 def test_tables(tmp_path):
     out = tmp_path/'t.docx'
@@ -350,7 +369,7 @@ def test_xrefs(tmp_path):
     for s in (r'REF sec_pay \w \h', r'REF sec_intro \w \h', r'PAGEREF sec_pay \h',
         'Section ', 'Sections ', 'Clause ', ' and ', 'Payment terms'): tt(s, doc, in_)
     num = zipfile.ZipFile(out).read('word/numbering.xml').decode()
-    for s in ('lowerLetter', '(%2)', 'Heading1'): tt(s, num, in_)
+    for s in ('lowerLetter', '(%3)', 'Heading1'): tt(s, num, in_)   # legal's '(%2)' sits on Word level 3 under the Title level
     tt('updateFields', zipfile.ZipFile(out).read('word/settings.xml').decode(), in_)
     tt('w:numPr', zipfile.ZipFile(out).read('word/styles.xml').decode(), in_)
     tfail(lambda: mdhtml2docx('<p><a href="#nope" data-ref=""></a></p>', out), contains='#nope')
