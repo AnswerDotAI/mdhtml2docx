@@ -2,9 +2,9 @@
 
 Convert [MDHTML](https://github.com/AnswerDotAI/mdhtml) to Word docx files.
 
-`mdhtml` renders Markdown to an HTML5 document format shared by format-specific exporters. This package converts its portable core to docx from scratch. It uses [fast5ever](https://github.com/AnswerDotAI/fast5ever)'s mutable WHATWG DOM for input and lxml for the generated WordprocessingML.
+`mdhtml` renders Markdown to an HTML5 document format shared by format-specific exporters. `mdhtml2docx` converts its portable core to docx from scratch. It uses [fast5ever](https://github.com/AnswerDotAI/fast5ever)'s mutable WHATWG DOM for input and lxml to generate WordprocessingML.
 
-MDHTML accepts the full HTML vocabulary. This exporter supports the portable elements and annotations listed below. It preserves the text of unknown inline elements, recurses through block containers, and warns when an unsupported block must become a plain paragraph. HTML parsing and repair belong to `mdhtml`; this package only walks the resulting tree.
+MDHTML accepts the full HTML vocabulary. This exporter supports the elements and annotations listed below. It preserves the text of unknown inline elements and recurses through block containers. It returns a warning when an unsupported block must become a plain paragraph. HTML parsing and repair belong to `mdhtml`.
 
 ## Usage
 
@@ -16,7 +16,9 @@ html = md2mdhtml(markdown_text)
 warnings = mdhtml2docx(html, 'out.docx')
 ```
 
-`mdhtml2docx` takes an MDHTML string, writes a docx, and returns a list of warning strings. It parses strings with `mdhtml.mdhtml2dom`, so normal HTML5 repair applies and XML well-formedness is irrelevant. It also accepts an existing mutable fast5ever DOM:
+`mdhtml2docx` takes an MDHTML string, writes a docx, and returns a list of warning strings. It parses strings with `mdhtml.mdhtml2dom`. Normal HTML5 repair applies; the input need not be well-formed XML.
+
+You can also pass an existing mutable fast5ever DOM:
 
 ```python
 from mdhtml import mdhtml2dom
@@ -26,35 +28,74 @@ document.children[0].attrs['custom-style'] = 'Contract Title'
 warnings = mdhtml2docx(document, 'out.docx')
 ```
 
-Body-position text and phrasing content become implicit Word paragraphs. Whitespace between blocks remains inert. HTML templates remain inert and are not rendered.
+Body-position text and phrasing content become implicit Word paragraphs. Whitespace between blocks does not produce content. HTML templates are not rendered.
 
-Supported: headings, paragraphs, bold, italic, strikethrough, underline (the `u` element), highlight, superscript and subscript, inline code, links (external and internal, via bookmarks), images (local files are embedded with correct dimensions; remote URLs degrade to links), block quotes, fenced and indented code blocks, bullet and numbered lists (including nesting, `start`, and task-list checkboxes), pipe and grid tables (including row and column spans and header rows), definition lists, footnotes, horizontal rules, and abbreviations. A `details` div (the dialect's collapsible block) degrades to its label as a bold line above the body, never a numbered heading — Word has no folding. Math spans and blocks become native Word math zones (`m:oMath`) holding the source text as-is, whatever the dialect (TeX, UnicodeMath, AsciiMath). Build-up/rendering is left downstream, and pandoc reads the zones back as math.
+## Supported content
 
-Code blocks with a language are syntax colored when [fastpylight](https://github.com/AnswerDotAI/fastpylight) is installed: tokens get `Hl*` character styles (e.g. `Hl Keyword`), whose colors come from the theme entry in the reference list below, so a finished document can be restyled in Word like everything else.
+The exporter supports these elements:
+
+- Headings, paragraphs, block quotes, fenced and indented code blocks, and horizontal rules.
+- Bold, italic, strikethrough, underline (`u`), highlight, superscript, subscript, inline code, and abbreviations.
+- External links and internal links through bookmarks.
+- Images from local files, embedded with their dimensions. Remote image URLs become links.
+- Bullet and numbered lists, including nesting, `start`, and task-list checkboxes.
+- Pipe and grid tables, including row and column spans and header rows.
+- Definition lists and footnotes.
+
+A `details` div becomes its label as a bold line above the body. It does not become a numbered heading or retain its collapsible behavior.
+
+Math spans and blocks become native Word math zones (`m:oMath`). These contain the source text unchanged, whether TeX, UnicodeMath, or AsciiMath. Math build-up and rendering are left to downstream tools. Pandoc reads the zones back as math.
+
+When [fastpylight](https://github.com/AnswerDotAI/fastpylight) is installed, code blocks with a language use syntax coloring. Tokens receive `Hl*` character styles such as `Hl Keyword`. Their colors come from the reference theme described below. You can restyle them in Word.
 
 ## Styling
 
-The generated document uses named styles, never inline formatting, so appearance is controlled by restyling. A markdown h1 is the document title: it gets Word's Title style and shows no number, and h2 through h6 map to heading 1 through 5. The title does carry the numbering's invisible level 0, so every h1 restarts the count below it: a file holding several documents, each opening with an h1, numbers each of them from 1. Prose paragraphs get Body Text (First Paragraph directly after a heading or similar block, following pandoc's convention), and the other styles are the ones you would expect: Quote, Source Code, Verbatim Char, Hyperlink, List Paragraph, Compact (table cells), Definition Term, Definition, caption, footnote styles, and Table Grid (plus the author-selectable Borderless Table).
+The generated document uses named styles instead of inline formatting. Change the styles to change its appearance.
 
-Pass `reference='mydoc.docx'` to use your own document's styles instead of the built-in template, exactly like pandoc's `--reference-doc`. `reference` may also be a list: the first entry supplies the document (page setup, fonts, and all base styles), and each later entry contributes just its styles, replacing same-named earlier ones - either another `.docx`, or a fastpylight theme name such as `'dracula'`, which generates the code-color styles on the fly. The default is the built-in template plus `'github_light'`; pass a bare reference for plain uncolored code, or `mdhtml2docx.styles.theme_ref('dracula', 'dracula.docx')` to write a theme's styles as a standalone docx you can inspect or tweak. A `custom-style="Name"` attribute (from `{custom-style="Name"}` in Markdown) applies that style from your reference doc; if the style is missing, a stub is injected and a warning returned. A plain class like `{.note}` applies a style only when your reference doc defines one named `note`, and is otherwise ignored. Both work on tables too: a table whose `custom-style` or class names a table style in the reference doc uses it in place of Table Grid - the built-in template ships `Borderless Table` (no gridlines, for signature blocks and other layout tables).
+Markdown headings map to Word styles as follows:
 
-Tables can mix fixed and proportional column widths with a `colwidths` attribute, written in Markdown as an attribute list after the table: `{: colwidths="10em 2fr 1fr"}`. Lengths fix a column; `fr` values share the remaining width, as in CSS grid.
+- h1 uses Title and displays no number. It carries the numbering's invisible level 0, which restarts the count below each title. A file containing several documents can therefore number each from 1.
+- h2 through h6 use Heading 1 through Heading 5.
 
-The built-in template is generated by `tools/createref.py` from a stock Word document; it defines exactly the styles the converter emits, plus next-paragraph chains so documents stay well-styled while edited by hand in Word.
+Prose uses Body Text. The first paragraph after a heading or similar block uses First Paragraph, following Pandoc's convention. Other styles include Quote, Source Code, Verbatim Char, Hyperlink, List Paragraph, Compact for table cells, Definition Term, Definition, caption, and footnote styles. Tables default to Table Grid. The built-in template also provides Borderless Table for signature blocks and other layout tables.
+
+### Reference documents and themes
+
+Pass `reference='mydoc.docx'` to use your own document's styles, as with Pandoc's `--reference-doc`.
+
+`reference` also accepts a list. The first entry supplies the document, including page setup, fonts, and base styles. Later entries contribute styles and replace earlier styles with the same name. Each can be another `.docx` or a fastpylight theme name such as `'dracula'`.
+
+The default is the built-in template plus `'github_light'`. Pass a reference document without a theme for plain, uncolored code. To write a theme's styles to a standalone docx for inspection or editing, use `mdhtml2docx.styles.theme_ref('dracula', 'dracula.docx')`.
+
+The built-in template is generated by `tools/createref.py` from a stock Word document. It defines the styles the converter emits and next-paragraph chains for continued editing in Word.
+
+### Style annotations and table widths
+
+A `custom-style="Name"` attribute, written as `{custom-style="Name"}` in Markdown, applies that style from your reference document. If the style is missing, the converter inserts a stub and returns a warning.
+
+A plain class such as `{.note}` applies a style only when the reference document defines one named `note`. Otherwise it is ignored. Both annotations also work on tables. A named table style replaces Table Grid.
+
+Tables can mix fixed and proportional column widths. Add an attribute list after the table: `{: colwidths="10em 2fr 1fr"}`. Lengths fix a column's width. The `fr` values divide the remaining width proportionally, as in CSS grid.
 
 ## Raw docx
 
-This converter consumes MDHTML raw data whose `data-format` is `docx`:
+The converter accepts MDHTML raw data with `data-format="docx"`:
 
 ```html
 <script type="application/vnd.mdhtml.raw" data-format="docx">…</script>
 ```
 
-A ```` ```{=docx} ```` fenced block in Markdown, or inline code followed by `{=docx}`, produces that carrier. The payload is parsed as WordprocessingML and inserted verbatim. Block payloads supply content such as `w:p` or `w:tbl`; inline payloads supply content such as `w:r`. The prefixes `w`, `r`, `wp`, `a`, `pic`, and `m` are predeclared, so no namespace boilerplate is needed.
+A ```` ```{=docx} ```` fenced block in Markdown, or inline code followed by `{=docx}`, produces this element. The payload is parsed as WordprocessingML and inserted verbatim. Block payloads contain elements such as `w:p` or `w:tbl`. Inline payloads contain elements such as `w:r`. The prefixes `w`, `r`, `wp`, `a`, `pic`, and `m` are predeclared.
 
-Literal payloads have no `data-encoding`. The exporter performs one character-reference decoding pass for `data-encoding="html"`, and accepts UTF-8 payloads encoded with `data-encoding="base64"`. Malformed payloads and unknown encodings are dropped with a warning. Raw data for other formats is skipped silently.
+Payload encoding follows these rules:
 
-The canonical example is a page break:
+- No `data-encoding`: use the literal payload.
+- `data-encoding="html"`: perform one character-reference decoding pass.
+- `data-encoding="base64"`: decode a base64-encoded UTF-8 payload.
+
+Malformed payloads and unknown encodings are dropped with a warning. Raw data for other formats is skipped silently.
+
+For example, insert a page break with:
 
     ```{=docx}
     <w:p><w:r><w:br w:type="page"/></w:r></w:p>
@@ -62,14 +103,46 @@ The canonical example is a page break:
 
 ## Cross-references
 
-Markdown references like `[@sec-payment]` become MDHTML `a` elements marked with `data-ref`, which this exporter turns into live Word REF fields rather than baked text. The default field is `REF <bookmark> \w \h`, the full-context paragraph number ("3.(c)(iii)") as a hyperlink; `settings.xml` gets `updateFields`, so Word refreshes on open. The `leaf`, `rel`, `text`, and `page` tokens select other fields, while the independent `bare` token suppresses the prefix word. Unknown or conflicting tokens are conversion errors.
+Markdown references such as `[@sec-payment]` become live Word REF fields. MDHTML represents them as `a` elements with `data-ref`.
 
-The word before the number comes from the reference's type, the id up to its first `-`: `sec` maps to Section/Sections out of the box, and `reftypes=dict(exh=('Exhibit', 'Exhibits'))` adds more. `[Clause @sec-x]` overrides the word for one reference; `[-@sec-x]` suppresses it. Grouped references use a `span` marked with `data-refs` and join as "Sections 3.1 and 4.2" with one field per number. They are never collapsed into ranges, because "3.1-3.3" is static text whose meaning silently changes when a clause is inserted. A reference whose target id does not exist, or whose type has no prefix defined when one is needed, raises rather than warning: a lawyer's document must not open showing "Error! Reference source not found."
+The default field is `REF <bookmark> \w \h`. It displays the full-context paragraph number, such as "3.(c)(iii)", as a hyperlink. The converter sets `updateFields` in `settings.xml` so Word refreshes fields on open.
 
-Number fields need numbered headings. If your reference docx already numbers its heading styles (most firm templates do), nothing more is required, and the converter leaves that numbering alone. Otherwise pass `number_headings='legal'` for 1. / (a) / (i) numbering or `'decimal'` for 1. / 1.1. / 1.1.1. (the names index mdhtml's `SCHEMES`), or pass your own scheme as a `{lvlText: numFmt}` dict, one entry per heading level from h1 down, the same shape as mdhtml's: level 0 is the h1 title with an empty lvlText, and `%2` is the h2 counter. A reference-list entry ending in `.xml` is a third route: a raw file of `w:style`, `w:abstractNum`, and `w:num` elements contributing styles and numbering together, with ids remapped to avoid collisions.
+The `leaf`, `rel`, `text`, and `page` tokens select other fields. The independent `bare` token suppresses the prefix word. Unknown or conflicting tokens are conversion errors.
 
-Figures and captioned tables number themselves with SEQ fields: a figure renders as its image plus a "Figure 1: caption" paragraph below (caption style), a table caption as "Table 1: caption" above the table, both live. When the element has an id, the label-and-number span is bookmarked, so `[@fig-plot]` inserts a live "Figure 1" (no extra prefix word; the label is part of the bookmarked text) and `[-@tbl-stages]` the bare number via a second number-only bookmark. `fig` and `tbl` are built-in reftypes alongside `sec`, and their label words come from the same table. Mixed-type groups render each item with its own singular prefix ("Figure 1 and Table 2"); same-type groups pluralize once. Reference targets must be things that get bookmarks - headings, paragraphs, figures, and tables with ids - and a ref to anything else is an error at conversion time.
+### Prefixes and groups
+
+The reference type is the part of the target id before its first `-`. It determines the word before the number. The built-in `sec` type uses Section or Sections. Add types with `reftypes=dict(exh=('Exhibit', 'Exhibits'))`.
+
+Use `[Clause @sec-x]` to override the word for one reference, or `[-@sec-x]` to suppress it.
+
+Grouped references use a `span` with `data-refs`. They render as "Sections 3.1 and 4.2", with one field per number. Groups never collapse into static ranges such as "3.1-3.3", whose meaning could change when a clause is inserted.
+
+A missing target id raises a conversion error. A reference type with no defined prefix also raises when a prefix is required. A lawyer's document must not open showing "Error! Reference source not found."
+
+### Heading numbering
+
+Number fields require numbered headings. If your reference docx already numbers its heading styles, the converter leaves that numbering unchanged.
+
+Otherwise, select a scheme with `number_headings`:
+
+- `'legal'` uses 1. / (a) / (i) numbering.
+- `'decimal'` uses 1. / 1.1. / 1.1.1. numbering.
+- A `{lvlText: numFmt}` dictionary supplies a custom scheme, with one entry per heading level from h1 down. Level 0 is the h1 title with an empty `lvlText`. `%2` is the h2 counter.
+
+The named schemes come from mdhtml's `SCHEMES`. The custom dictionary uses the same format as mdhtml.
+
+A reference-list entry ending in `.xml` can also supply styles and numbering. It contains raw `w:style`, `w:abstractNum`, and `w:num` elements. The converter remaps their ids to avoid collisions.
+
+### Figures and tables
+
+Figures and captioned tables use live SEQ fields. A figure's caption appears below its image as "Figure 1: caption", using the caption style. A table's caption appears above it as "Table 1: caption".
+
+When the element has an id, the converter bookmarks its label and number. `[@fig-plot]` inserts "Figure 1" from that bookmark without adding another prefix. A second, number-only bookmark supplies the bare number for references such as `[-@tbl-stages]`.
+
+`fig` and `tbl` are built-in reference types alongside `sec`. Their labels come from the same `reftypes` table. Same-type groups pluralize once. Mixed-type groups use each item's singular prefix, as in "Figure 1 and Table 2".
+
+Reference targets must be headings, paragraphs, figures, or tables with ids. A reference to anything else raises a conversion error.
 
 ## Validation
 
-Every generated file is checked three ways in the test suite: lxml validation against the ECMA-376 schemas (container, CRC, XML, XSD), a semantic round trip through pandoc's independent docx reader, and occasional acceptance runs in Microsoft Word itself, driven live via AppleScript.
+The test suite checks docx containers, CRCs, and XML, validates against the ECMA-376 schemas with lxml, and performs semantic round trips through Pandoc's independent docx reader. Periodic acceptance runs open documents in Microsoft Word through AppleScript.
