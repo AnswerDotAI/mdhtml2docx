@@ -584,7 +584,7 @@ class Converter:
             self.first = False
             return [self.para(self.bookmark(el, self.runs(el, {})), use, ex, psid)]
         if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
-            extra = [E('w:keepNext')]
+            extra = []
             if self.active_head is not None:
                 extra.append(E('w:numPr', E('w:ilvl', {'w:val': int(tag[1]) - 1}),
                     E('w:numId', {'w:val': self.active_head})))
