@@ -30,3 +30,12 @@ pytest -q -m slow
 Table rows stay on one page by default. A row that does not fit in the remaining space moves to the next page. Tables can span pages. Rows taller than a page can still split.
 
 Add `{: keep-rows=false}` directly below a Markdown table to allow its rows to split. `{: keep-rows=true}` explicitly selects the default. The converter writes Word's `cantSplit` setting on each row. The false override disables that setting even when a table style enables it.
+
+
+## Included documents
+
+A `div.include` with a unique `scope` attribute gives local reference names to an included document. IDs retain their type prefix. For example, `sec-notices` under scope `rsa.` becomes `sec-rsa.notices`. Links to targets inside the include follow the renamed IDs. External targets are unchanged.
+
+A div's `number-headings` attribute selects `decimal`, `legal`, or `false` for its contents. Each numbered div owns a Word numbering instance. The enclosing numbering resumes after the div. Heading pagination remains controlled by the reference styles.
+
+A `.keep-together` div keeps its consecutive paragraphs together. A page-break-only paragraph after a table is transferred to the following paragraph to avoid an empty page. List continuation paragraphs receive independent indentation properties.

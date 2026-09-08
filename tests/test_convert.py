@@ -528,3 +528,18 @@ def test_table_row_page_breaks(tmp_path, attr, keep):
     ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
     teq(root.xpath('//w:tr/w:trPr/w:cantSplit/@w:val', namespaces=ns), [keep, keep])
     teq(len(root.xpath('//w:tr/w:trPr/w:tblHeader', namespaces=ns)), 1)
+
+
+
+def test_list_continuation_paragraphs_keep_their_indent(tmp_path):
+    from lxml import etree
+    out = tmp_path/'continuations.docx'
+    html = '<ol><li>Outer<ol><li>Middle<ol><li><p>Lead</p>'
+    html += ''.join(f'<p>({c}) Continuation</p>' for c in 'ABCD')
+    html += '</li></ol></li></ol></li></ol>'
+    teq(mdhtml2docx(html, out), [])
+    with zipfile.ZipFile(out) as z: root = etree.fromstring(z.read('word/document.xml'))
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    paras = root.xpath('//w:p[w:r/w:t[contains(.,"Continuation")]]', namespaces=ns)
+    teq([p.xpath('w:pPr/w:ind/@w:left', namespaces=ns) for p in paras], [['2160']] * 4)
+    teq(fast_checks(out), 'valid')

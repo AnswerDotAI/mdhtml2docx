@@ -418,9 +418,9 @@ class Converter:
         cont = [E('w:ind', {'w:left': 720 * (ilvl + 1)})]
         out = []
         for kind, val in self.li_parts(li):
-            if kind == 'inline': out.append(self.para(self.group_runs(val, {}), 'list', numpr if not out else cont))
+            if kind == 'inline': out.append(self.para(self.group_runs(val, {}), 'list', numpr if not out else deepcopy(cont)))
             elif _tag(val) in ('ul', 'ol'): out += self.list_el(val, ilvl + 1)
-            elif _tag(val) == 'p': out.append(self.para(self.runs(val, {}), 'list', numpr if not out else cont))
+            elif _tag(val) == 'p': out.append(self.para(self.runs(val, {}), 'list', numpr if not out else deepcopy(cont)))
             else: out += self.block(val, 'list')
         return out or [self.para([], 'list', numpr)]
 
