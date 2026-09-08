@@ -23,3 +23,10 @@ pytest -q -m slow
 ```
 
 `tests/test_validate.py` checks the zip container, XML, relationships, and ECMA-376 schemas. The committed reference document and schemas remain binary/XML assets; input MDHTML fixtures should use ordinary HTML serialization rather than XHTML spellings.
+
+
+## Table pagination
+
+Table rows stay on one page by default. A row that does not fit in the remaining space moves to the next page. Tables can span pages. Rows taller than a page can still split.
+
+Add `{: keep-rows=false}` directly below a Markdown table to allow its rows to split. `{: keep-rows=true}` explicitly selects the default. The converter writes Word's `cantSplit` setting on each row. The false override disables that setting even when a table style enables it.

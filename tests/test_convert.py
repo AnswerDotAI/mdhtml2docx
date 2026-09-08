@@ -515,3 +515,16 @@ def test_details_degrades_to_bold_label(tmp_path):
     tt('**the label**', md, in_)
     tt('body text', md, in_)
     assert '# the label' not in md   # label is a bold line, not a heading
+
+
+@pytest.mark.parametrize('attr,keep', [('', '1'), ('{: keep-rows=true}', '1'), ('{: keep-rows=false}', '0')])
+def test_table_row_page_breaks(tmp_path, attr, keep):
+    from lxml import etree
+    out = tmp_path/'rows.docx'
+    md = '| Name | Value |\n|---|---|\n| Award | Blank |\n' + attr
+    teq(mdhtml2docx(md2mdhtml(md), out), [])
+    teq(fast_checks(out), 'valid')
+    with zipfile.ZipFile(out) as z: root = etree.fromstring(z.read('word/document.xml'))
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    teq(root.xpath('//w:tr/w:trPr/w:cantSplit/@w:val', namespaces=ns), [keep, keep])
+    teq(len(root.xpath('//w:tr/w:trPr/w:tblHeader', namespaces=ns)), 1)
