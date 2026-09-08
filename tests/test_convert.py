@@ -555,3 +555,16 @@ def test_paragraph_keep_with_next_attribute(tmp_path):
     ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
     teq(root.xpath('//w:p/w:pPr/w:keepNext/@w:val', namespaces=ns), ['1', '0'])
     teq(fast_checks(out), 'valid')
+
+
+
+def test_list_paragraph_bookmarks(tmp_path):
+    from lxml import etree
+    out = tmp_path/'list-refs.docx'
+    md = '1. First item.\n   {: #sec-first}\n\n2. Second item.\n   {: #sec-second}\n\nSee [@sec-first].'
+    teq(mdhtml2docx(md2mdhtml(md), out), [])
+    with zipfile.ZipFile(out) as z: root = etree.fromstring(z.read('word/document.xml'))
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    names = root.xpath('//w:bookmarkStart/@w:name', namespaces=ns)
+    assert {'sec_first', 'sec_second'} <= set(names)
+    teq(fast_checks(out), 'valid')
