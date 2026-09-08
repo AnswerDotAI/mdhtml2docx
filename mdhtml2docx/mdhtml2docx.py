@@ -4,12 +4,13 @@ Write-only, reference-archive architecture: the reference template supplies styl
 we generate word/document.xml (plus footnotes/numbering/media parts as needed) into a copy of its
 archive. Block and inline walkers mirror the MDHTML element inventory; STYLE_MAP names every
 style we emit."""
-import posixpath, re, zipfile
+import hashlib, posixpath, re, zipfile
 from copy import deepcopy
 from pathlib import Path
 from fast5ever import Comment, Element, Node, Text
 from lxml import etree
 from mdhtml import mdhtml2dom
+from mdhtml.scopes import scope_ids
 from mdhtml.export import REFTYPES, SCHEMES, decode_raw, tmpl_node, group_plan, ref_tokens, ref_variant, target_kind, Resolver
 from .styles import STYLE_MAP, style_id, theme_styles
 from .styles import ref_path as _refpath
@@ -88,6 +89,8 @@ class Converter:
             if number_headings not in SCHEMES: raise ValueError(f'unknown numbering scheme {number_headings!r}')
             number_headings = SCHEMES[number_headings]
         self.scheme = list(number_headings.items()) if number_headings else None
+        self.local_heads = []
+        self.active_head = None
         self.headnum = None
         if number_headings and self.sroot.find(f'{{{W}}}style[@{{{W}}}styleId="Heading1"]/{{{W}}}pPr/{{{W}}}numPr') is None:
             self._numid += 1
@@ -191,6 +194,7 @@ class Converter:
         if id not in self._bknames:
             nm = re.sub(r'\W', '_', id)
             if not nm[:1].isalpha(): nm = 'B' + nm
+            if len(nm) > 38: nm = nm[:27] + '_' + hashlib.sha256(id.encode()).hexdigest()[:10]
             while nm in self._bknames.values(): nm += '_'
             self._bknames[id] = nm
         return self._bknames[id]
@@ -523,7 +527,9 @@ class Converter:
                     body = self.cell_blocks(cell, ri < nhead)
                     if not len(body) or etree.QName(body[-1]).localname != 'p': body.append(E('w:p'))
                     tcs.append(E('w:tc', tcpr, *body))
-            trs.append(E('w:tr', E('w:trPr', E('w:tblHeader')) if ri < nhead else None, *tcs))
+            trpr = E('w:trPr', E('w:tblHeader') if ri < nhead else None,
+                E('w:cantSplit') if 'keep-rows' in _classes(el) else None)
+            trs.append(E('w:tr', trpr if len(trpr) else None, *tcs))
         for mel in markers.get(len(rows), []): trs.append(_marker_tr(mel))
         out = self.caption_para(el, 'tbl', cap)
         return out + [E('w:tbl', tblpr, grid, *trs), E('w:p')]
@@ -577,7 +583,12 @@ class Converter:
             use = 'firstpara' if self.first and style == 'body' and not psid else style
             self.first = False
             return [self.para(self.bookmark(el, self.runs(el, {})), use, ex, psid)]
-        if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'): return [self.para(self.bookmark(el, self.runs(el, {})), tag)]
+        if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+            extra = [E('w:keepNext')]
+            if self.active_head is not None:
+                extra.append(E('w:numPr', E('w:ilvl', {'w:val': int(tag[1]) - 1}),
+                    E('w:numId', {'w:val': self.active_head})))
+            return [self.para(self.bookmark(el, self.runs(el, {})), tag, extra)]
         if tag == 'blockquote':
             self.bq += 1
             try: return self.blocks(el, 'blockquote')
@@ -593,12 +604,31 @@ class Converter:
         if tag == 'figure': return self.figure(el)
         if tag == 'template': return [self.para(runs)] if (runs := self.tmpl_runs(el, {}, 'block')) else []
         if tag == 'div':
+            if (scheme := _get(el, 'number-headings')) is not None:
+                previous = self.active_head
+                if scheme == 'false': self.active_head = 0
+                else:
+                    if scheme not in SCHEMES: raise ValueError(f'unknown numbering scheme {scheme!r}')
+                    self._numid += 1
+                    self.active_head = self._numid
+                    self.local_heads.append((self.active_head, list(SCHEMES[scheme].items())))
+                try: return self.blocks(el, style, self.custom_style(el, 'paragraph') or sid)
+                finally: self.active_head = previous
             cls = _classes(el)
             if 'math' in cls and 'display' in cls: return [E('w:p', E('m:oMathPara', self.omath(el)))]
             if 'details' in cls and (kids := _els(el)) and _tag(kids[0]) in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
                 label = self.para(self.runs(kids[0], {'b': True}), style)   # the dialect's collapsible block: label as a bold line, never a numbered heading
                 return [label, *self.block_nodes(kids[1:], style, sid)]
-            return self.blocks(el, style, self.custom_style(el, 'paragraph') or sid)
+            blocks = self.blocks(el, style, self.custom_style(el, 'paragraph') or sid)
+            if 'keep-together' in cls:
+                for p in blocks[:-1]:
+                    if p.tag != qn('w:p'): continue
+                    ppr = p.find(qn('w:pPr'))
+                    if ppr is None:
+                        ppr = E('w:pPr')
+                        p.insert(0, ppr)
+                    if ppr.find(qn('w:keepNext')) is None: ppr.insert(1 if ppr.find(qn('w:pStyle')) is not None else 0, E('w:keepNext'))
+            return blocks
         if tag in BLOCK_TAGS and any(_tag(c) in BLOCK_TAGS for c in _els(el)):
             return self.blocks(el, style, sid)   # unknown container: recurse
         self.warn(f'unhandled block <{tag}>; emitted as plain paragraph')
@@ -702,7 +732,25 @@ class Converter:
         "word/document.xml bytes: our blocks + the template's sectPr"
         root = etree.Element(qn('w:document'), nsmap=NS)
         body = etree.SubElement(root, qn('w:body'))
-        for b in body_blocks: body.append(b)
+        skipped = set()
+        for i in range(len(body_blocks) - 2, -1, -1):
+            if i < 2 or body_blocks[i-2].tag != qn('w:tbl'): continue
+            spacer = body_blocks[i-1]
+            if spacer.tag != qn('w:p') or len(spacer): continue
+            b, nxt = body_blocks[i:i+2]
+            br = b.find('w:r/w:br', NS)
+            if br is None or br.get(qn('w:type')) != 'page' or nxt.tag != qn('w:p'): continue
+            if any(e.tag not in {qn('w:p'), qn('w:pPr'), qn('w:pStyle'), qn('w:r'), qn('w:rPr'), qn('w:br')} for e in b.iter()): continue
+            ppr = nxt.find(qn('w:pPr'))
+            if ppr is None:
+                ppr = E('w:pPr')
+                nxt.insert(0, ppr)
+            pos = next((j for j, e in enumerate(ppr) if etree.QName(e).localname not in {'pStyle', 'keepNext', 'keepLines'}), len(ppr))
+            ppr.insert(pos, E('w:pageBreakBefore'))
+            skipped.add(i)
+            if i and body_blocks[i-1].tag == qn('w:p') and not len(body_blocks[i-1]): skipped.add(i-1)
+        for i, b in enumerate(body_blocks):
+            if i not in skipped: body.append(b)
         body.append(self.sectpr)
         return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
@@ -737,10 +785,25 @@ class Converter:
                     E('w:suff', {'w:val': 'nothing'}) if not txt else None,   # an empty number (the title's) takes no tab either
                     E('w:lvlText', {'w:val': txt}), E('w:lvlJc', {'w:val': 'left'})))
             root.append(an)
+        local_abs = []
+        used_abs = [int(e.get(qn('w:abstractNumId'))) for e in [*root, *self.xabs] if e.tag == qn('w:abstractNum')]
+        next_abs = max(used_abs, default=self._absbase + 2) + 1
+        for nid, scheme in self.local_heads:
+            aid = next_abs + len(local_abs)
+            an = E('w:abstractNum', {'w:abstractNumId': aid}, E('w:multiLevelType', {'w:val': 'multilevel'}))
+            for i, (txt, fmt) in enumerate(scheme):
+                an.append(E('w:lvl', {'w:ilvl': i}, E('w:start', {'w:val': 1}),
+                    E('w:numFmt', {'w:val': fmt}),
+                    E('w:suff', {'w:val': 'nothing'}) if not txt else None,
+                    E('w:lvlText', {'w:val': txt}), E('w:lvlJc', {'w:val': 'left'})))
+            root.append(an)
+            local_abs.append((nid, aid))
         for e in self.xabs: root.append(e)
         for e in tnums: root.append(e)
         if self.headnum: root.append(E('w:num', {'w:numId': self.headnum}, E('w:abstractNumId', {'w:val': self._absbase + 2})))
         for e in self.xnums: root.append(e)
+        for nid, aid in local_abs:
+            root.append(E('w:num', {'w:numId': nid}, E('w:abstractNumId', {'w:val': aid})))
         for nid, aid, start in self.nums:
             root.append(E('w:num', {'w:numId': nid}, E('w:abstractNumId', {'w:val': self._absbase + aid}),  # chkstyle: ignore-node
                 *[E('w:lvlOverride', {'w:ilvl': i}, E('w:startOverride', {'w:val': start if i == 0 else 1}))
@@ -861,7 +924,7 @@ class Converter:
         return body
 
     def to_docx(self, mdhtml, dest):
-        root = parse_frag(mdhtml)
+        root = scope_ids(parse_frag(mdhtml))
         nodes = self.harvest_footnotes(root.children)
         self.idtext, self.reftarget, self.res = {}, {}, Resolver(self.reftypes)
         for e in (e for node in nodes if isinstance(node, Element) for e in _walk(node)):
@@ -874,7 +937,7 @@ class Converter:
         blocks = self.block_nodes(nodes)
         docxml = self.document(blocks)
         parts = {}   # archive name -> (bytes, content-type kind); each also gets a document rel
-        if self.nums or self.headnum or self.xnums:
+        if self.nums or self.headnum or self.xnums or self.local_heads:
             parts['word/numbering.xml'] = (self.numbering_xml(), 'numbering')
             if self.tmplnum is None: self.rels.append((self.rid(), f'{R}/numbering', 'numbering.xml', False))
         if self.fnotes:
