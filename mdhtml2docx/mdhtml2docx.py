@@ -501,10 +501,13 @@ class Converter:
                 'w:firstColumn': 0, 'w:lastColumn': 0, 'w:noHBand': 0, 'w:noVBand': 1}))
         gw = dxa or [self.content_w // ncols] * ncols   # pandoc's docx reader drops tables whose gridCols lack w:w
         grid = E('w:tblGrid', *[E('w:gridCol', {'w:w': gw[i]}) for i in range(ncols)])
+        def _trpr(header=False):
+            return E('w:trPr', E('w:cantSplit', {'w:val': int(_get(el, 'keep-rows') != 'false')}),
+                E('w:tblHeader') if header else None)
         def _marker_tr(mel):
             "A range marker between rows: one full-width literal cell, so forms keep their markers visible"
             tcpr = E('w:tcPr', _tcw(0, ncols), E('w:gridSpan', {'w:val': ncols}) if ncols > 1 else None)
-            return E('w:tr', E('w:tc', tcpr, self.para(self.tmpl_runs(mel, {}, 'row'))))
+            return E('w:tr', _trpr(), E('w:tc', tcpr, self.para(self.tmpl_runs(mel, {}, 'row'))))
         trs = []
         for ri, rowcells in enumerate(placed):
             for mel in markers.get(ri, []): trs.append(_marker_tr(mel))
@@ -523,7 +526,7 @@ class Converter:
                     body = self.cell_blocks(cell, ri < nhead)
                     if not len(body) or etree.QName(body[-1]).localname != 'p': body.append(E('w:p'))
                     tcs.append(E('w:tc', tcpr, *body))
-            trs.append(E('w:tr', E('w:trPr', E('w:tblHeader')) if ri < nhead else None, *tcs))
+            trs.append(E('w:tr', _trpr(ri < nhead), *tcs))
         for mel in markers.get(len(rows), []): trs.append(_marker_tr(mel))
         out = self.caption_para(el, 'tbl', cap)
         return out + [E('w:tbl', tblpr, grid, *trs), E('w:p')]
