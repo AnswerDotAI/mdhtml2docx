@@ -39,3 +39,6 @@ A `div.include` with a unique `scope` attribute gives local reference names to a
 A div's `number-headings` attribute selects `decimal`, `legal`, or `false` for its contents. Each numbered div owns a Word numbering instance. The enclosing numbering resumes after the div. Heading pagination remains controlled by the reference styles.
 
 A `.keep-together` div keeps its consecutive paragraphs together. A page-break-only paragraph after a table is transferred to the following paragraph to avoid an empty page. List continuation paragraphs receive independent indentation properties.
+
+
+A paragraph may use `{: keep-with-next=true}` to stay with the next paragraph. `{: keep-with-next=false}` overrides an inherited setting. The attribute attaches to that paragraph without a container. Notebook authors should keep complete lists and fenced blocks within one note because notes render independently.

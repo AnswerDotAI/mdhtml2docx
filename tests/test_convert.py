@@ -543,3 +543,15 @@ def test_list_continuation_paragraphs_keep_their_indent(tmp_path):
     paras = root.xpath('//w:p[w:r/w:t[contains(.,"Continuation")]]', namespaces=ns)
     teq([p.xpath('w:pPr/w:ind/@w:left', namespaces=ns) for p in paras], [['2160']] * 4)
     teq(fast_checks(out), 'valid')
+
+
+
+def test_paragraph_keep_with_next_attribute(tmp_path):
+    from lxml import etree
+    out = tmp_path/'keep-next.docx'
+    md = 'Closing paragraph.\n{: keep-with-next=true}\n\nNotice.\n{: keep-with-next=false}'
+    teq(mdhtml2docx(md2mdhtml(md), out), [])
+    with zipfile.ZipFile(out) as z: root = etree.fromstring(z.read('word/document.xml'))
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    teq(root.xpath('//w:p/w:pPr/w:keepNext/@w:val', namespaces=ns), ['1', '0'])
+    teq(fast_checks(out), 'valid')

@@ -580,6 +580,8 @@ class Converter:
         tag = _tag(el)
         if tag == 'p':
             ex = self.qindent() if style == 'blockquote' else None
+            if (keep := _get(el, 'keep-with-next')) is not None:
+                ex = [E('w:keepNext', {'w:val': int(keep != 'false')}), *(ex or [])]
             psid = self.custom_style(el, 'paragraph') or sid
             use = 'firstpara' if self.first and style == 'body' and not psid else style
             self.first = False
