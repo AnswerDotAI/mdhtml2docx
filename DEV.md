@@ -38,3 +38,10 @@ A `div.include` with `scope="mic"` prefixes each local ID verbatim. For example,
 Each document starts with an h1 title. Word's existing heading numbering restarts after each h1. All included documents use the same numbering scheme selected for the export.
 
 Grouped references retain their type across scopes. References to `mic:sec-setup` and `speaker:sec-setup` share the prefix "Sections". Paragraph IDs in lists remain available as Word bookmarks. Long bookmark names are shortened to fit Word's limit.
+
+
+## Paragraph pagination
+
+A paragraph may use `{: keep-with-next=true}` to stay with the next paragraph. `{: keep-with-next=false}` overrides an inherited setting. A `.keep-together` div keeps its consecutive paragraphs together. Keep complete lists and fenced blocks within one notebook note because notes render independently.
+
+A page-break-only paragraph after a table is transferred to the following paragraph to avoid an empty page. Every list continuation paragraph retains the list indentation.

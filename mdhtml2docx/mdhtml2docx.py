@@ -415,9 +415,9 @@ class Converter:
         cont = [E('w:ind', {'w:left': 720 * (ilvl + 1)})]
         out = []
         for kind, val in self.li_parts(li):
-            if kind == 'inline': out.append(self.para(self.group_runs(val, {}), 'list', numpr if not out else cont))
+            if kind == 'inline': out.append(self.para(self.group_runs(val, {}), 'list', numpr if not out else deepcopy(cont)))
             elif _tag(val) in ('ul', 'ol'): out += self.list_el(val, ilvl + 1)
-            elif _tag(val) == 'p': out.append(self.para(self.bookmark(val, self.runs(val, {})), 'list', numpr if not out else cont))
+            elif _tag(val) == 'p': out.append(self.para(self.bookmark(val, self.runs(val, {})), 'list', numpr if not out else deepcopy(cont)))
             else: out += self.block(val, 'list')
         return out or [self.para([], 'list', numpr)]
 
@@ -577,6 +577,8 @@ class Converter:
         tag = _tag(el)
         if tag == 'p':
             ex = self.qindent() if style == 'blockquote' else None
+            if (keep := _get(el, 'keep-with-next')) is not None:
+                ex = [E('w:keepNext', {'w:val': int(keep != 'false')}), *(ex or [])]
             psid = self.custom_style(el, 'paragraph') or sid
             use = 'firstpara' if self.first and style == 'body' and not psid else style
             self.first = False
@@ -602,7 +604,16 @@ class Converter:
                 runs = self.bookmark(title, self.runs(title, {'b': True})) if title is not None else self.text_runs(label, {'b': True})
                 return ([self.para(runs, style)] if runs else []) + self.block_nodes(body, style, sid)
             if el.has_class('math') and el.has_class('display'): return [E('w:p', E('m:oMathPara', self.omath(el)))]
-            return self.blocks(el, style, self.custom_style(el, 'paragraph') or sid)
+            blocks = self.blocks(el, style, self.custom_style(el, 'paragraph') or sid)
+            if el.has_class('keep-together'):
+                for p in blocks[:-1]:
+                    if p.tag != qn('w:p'): continue
+                    ppr = p.find(qn('w:pPr'))
+                    if ppr is None:
+                        ppr = E('w:pPr')
+                        p.insert(0, ppr)
+                    if ppr.find(qn('w:keepNext')) is None: ppr.insert(1 if ppr.find(qn('w:pStyle')) is not None else 0, E('w:keepNext'))
+            return blocks
         if tag in BLOCK_TAGS and any(_tag(c) in BLOCK_TAGS for c in el.element_children):
             return self.blocks(el, style, sid)   # unknown container: recurse
         self.warn(f'unhandled block <{tag}>; emitted as plain paragraph')
@@ -706,7 +717,25 @@ class Converter:
         "word/document.xml bytes: our blocks + the template's sectPr"
         root = etree.Element(qn('w:document'), nsmap=NS)
         body = etree.SubElement(root, qn('w:body'))
-        for b in body_blocks: body.append(b)
+        skipped = set()
+        for i in range(len(body_blocks) - 2, -1, -1):
+            if i < 2 or body_blocks[i-2].tag != qn('w:tbl'): continue
+            spacer = body_blocks[i-1]
+            if spacer.tag != qn('w:p') or len(spacer): continue
+            b, nxt = body_blocks[i:i+2]
+            br = b.find('w:r/w:br', NS)
+            if br is None or br.get(qn('w:type')) != 'page' or nxt.tag != qn('w:p'): continue
+            if any(e.tag not in {qn('w:p'), qn('w:pPr'), qn('w:pStyle'), qn('w:r'), qn('w:rPr'), qn('w:br')} for e in b.iter()): continue
+            ppr = nxt.find(qn('w:pPr'))
+            if ppr is None:
+                ppr = E('w:pPr')
+                nxt.insert(0, ppr)
+            pos = next((j for j, e in enumerate(ppr) if etree.QName(e).localname not in {'pStyle', 'keepNext', 'keepLines'}), len(ppr))
+            ppr.insert(pos, E('w:pageBreakBefore'))
+            skipped.add(i)
+            if i and body_blocks[i-1].tag == qn('w:p') and not len(body_blocks[i-1]): skipped.add(i-1)
+        for i, b in enumerate(body_blocks):
+            if i not in skipped: body.append(b)
         body.append(self.sectpr)
         return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
