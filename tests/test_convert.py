@@ -577,21 +577,21 @@ def test_scoped_reference_group(tmp_path):
     from lxml import etree
     out = tmp_path/'scopes.docx'
     md = '\n\n'.join(f'::: {{.include scope="{scope}"}}\n# {title}\n\n## Setup {{#sec-setup}}\n\n'
-        'See [@sec-setup].\n:::' for scope, title in [('mic__', 'Microphone'), ('speaker__', 'Speaker')])
-    md += '\n\nCompare [@mic__sec-setup; @speaker__sec-setup].'
+        'See [@sec-setup].\n:::' for scope, title in [('__mic', 'Microphone'), ('__speaker', 'Speaker')])
+    md += '\n\nCompare [@sec-setup__mic; @sec-setup__speaker].'
     src = md2mdhtml(md)
-    assert 'id="mic__sec-setup"' in src and 'id="speaker__sec-setup"' in src
+    assert 'id="sec-setup__mic"' in src and 'id="sec-setup__speaker"' in src
     assert 'id="sec-setup"' not in src
     teq(mdhtml2docx(src, out, number_headings='decimal'), [])
     teq(fast_checks(out), 'valid')
     with zipfile.ZipFile(out) as z: root = etree.fromstring(z.read('word/document.xml'))
     ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-    assert {'mic__sec_setup', 'speaker__sec_setup'} <= set(root.xpath('//w:bookmarkStart/@w:name', namespaces=ns))
+    assert {'sec_setup__mic', 'sec_setup__speaker'} <= set(root.xpath('//w:bookmarkStart/@w:name', namespaces=ns))
     group = root.xpath('//w:p', namespaces=ns)[-1]
     assert 'Sections ' in ''.join(group.xpath('.//w:t/text()', namespaces=ns))
     fields = group.xpath('.//w:fldSimple/@w:instr', namespaces=ns)
-    assert any('REF mic__sec_setup ' in f for f in fields)
-    assert any('REF speaker__sec_setup ' in f for f in fields)
+    assert any('REF sec_setup__mic ' in f for f in fields)
+    assert any('REF sec_setup__speaker ' in f for f in fields)
 
 
 def test_list_continuation_paragraphs_keep_their_indent(tmp_path):
