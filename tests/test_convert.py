@@ -76,6 +76,7 @@ def test_lists(tmp_path):
     warns = mdhtml2docx(
         '<ul>\n<li>one</li>\n<li>two\n<ul>\n<li>deep</li>\n</ul>\n</li>\n</ul>\n'
         '<ol>\n<li>first</li>\n<li>second</li>\n</ol>\n'
+        '<p>Another list:</p>\n'  # Pandoc merges adjacent lists sharing a numbering definition, losing the restart.
         '<ol start="5">\n<li>fifth</li>\n</ol>\n'
         '<ul class="task-list">\n'
         '<li><input type="checkbox" disabled="disabled" checked="checked"> done</li>\n'
@@ -88,6 +89,24 @@ def test_lists(tmp_path):
     # pandoc's reader recognizes the ballot-box glyphs and reconstructs markdown task items
     tt('- [x] done', lines, in_)
     tt('- [ ] todo', lines, in_)
+
+
+def test_adjacent_list_numbering_instances(tmp_path):
+    "Check adjacent-list restarts directly in OOXML, independently of Pandoc's list grouping."
+    from lxml import etree
+    out = tmp_path/'lists.docx'
+    teq(mdhtml2docx('<ol><li>first</li><li>second</li></ol><ol start="5"><li>fifth</li></ol>', out), [])
+    teq(fast_checks(out), 'valid')
+    with zipfile.ZipFile(out) as z:
+        doc = etree.fromstring(z.read('word/document.xml'))
+        nums = etree.fromstring(z.read('word/numbering.xml'))
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    first, second, fifth = doc.xpath('//w:body/w:p/w:pPr/w:numPr/w:numId/@w:val', namespaces=ns)
+    teq(first, second)
+    assert first != fifth
+    for nid, start in ((first, '1'), (fifth, '5')):
+        teq(nums.xpath('w:num[@w:numId=$nid]/w:lvlOverride[@w:ilvl="0"]/w:startOverride/@w:val',
+                      namespaces=ns, nid=nid), [start])
 
 
 def test_default_reference():
@@ -528,3 +547,16 @@ def test_table_row_page_breaks(tmp_path, attr, keep):
     ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
     teq(root.xpath('//w:tr/w:trPr/w:cantSplit/@w:val', namespaces=ns), [keep, keep])
     teq(len(root.xpath('//w:tr/w:trPr/w:tblHeader', namespaces=ns)), 1)
+
+
+@pytest.mark.parametrize('state', ['fixed', 'open', 'closed'])
+def test_panel_contract(tmp_path, state):
+    out = tmp_path/'panel.docx'
+    src = (f'<div data-panel data-callout="warning" data-disclosure="{state}">'
+           '<header id="label">The <em>label</em></header>Body text<p>More body</p><h3>Actual heading</h3></div>')
+    assert not mdhtml2docx(src, out)
+    assert fast_checks(out) == 'valid'
+    text = pandoc(out)
+    assert 'label' in text and 'Body text' in text and 'More body' in text
+    assert '## Actual heading' in text  # h1 maps to Word's Title; h3 maps to Heading 2
+    assert not any(line.startswith('#') and 'label' in line for line in text.splitlines())

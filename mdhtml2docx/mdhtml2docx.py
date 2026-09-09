@@ -10,7 +10,7 @@ from pathlib import Path
 from fast5ever import Comment, Element, Node, Text
 from lxml import etree
 from mdhtml import mdhtml2dom
-from mdhtml.export import REFTYPES, SCHEMES, decode_raw, tmpl_node, group_plan, ref_tokens, ref_variant, target_kind, Resolver
+from mdhtml.export import REFTYPES, SCHEMES, decode_raw, tmpl_node, group_plan, ref_tokens, ref_variant, target_kind, Resolver, panel_parts
 from .styles import STYLE_MAP, style_id, theme_styles
 from .styles import ref_path as _refpath
 from .wml import *
@@ -28,10 +28,9 @@ HEADING_STYLE_IDS = ['Title'] + [f'Heading{i}' for i in range(1, 6)]   # h1-h6, 
 
 def _tag(el): return el.name
 def _get(el, key, default=None): return el.attrs.get(key, default)
-def _els(el): return [n for n in el.children if isinstance(n, Element)]
 def _walk(el):
     yield el
-    for child in _els(el): yield from _walk(child)
+    for child in el.element_children: yield from _walk(child)
 def _classes(el): return (_get(el, 'class') or '').split()
 def _is_raw(el): return _tag(el) == 'script' and _get(el, 'type') == 'application/vnd.mdhtml.raw'
 
@@ -224,7 +223,7 @@ class Converter:
 
     def ref_group(self, el, fmt):
         "data-refs span: one pluralized prefix for a same-type group, per-item singular prefixes for mixed types; never range-collapsed"
-        refs = [c for c in _els(el) if _tag(c) == 'a']
+        refs = [c for c in el.element_children if _tag(c) == 'a']
         types = [(_get(a, 'href') or '#')[1:].split('-')[0] for a in refs]
         out = []
         for (sep, pre, plural), a in zip(group_plan(types), refs):
@@ -246,7 +245,7 @@ class Converter:
     def span(self, el, fmt):
         "Inline span: math -> inline m:oMath zone (linear source, dialect-agnostic), custom style -> rStyle, else transparent; an id bookmarks the runs"
         if _get(el, 'data-refs') is not None: return self.ref_group(el, fmt)
-        if 'math' in _classes(el): return self.bookmark(el, [self.omath(el)])
+        if el.has_class('math'): return self.bookmark(el, [self.omath(el)])
         if sid := self.custom_style(el, 'character'): return self.bookmark(el, self.runs(el, fmt | {'rstyle': sid}))
         return self.bookmark(el, self.runs(el, fmt))
 
@@ -256,9 +255,9 @@ class Converter:
 
     def fnref(self, el, fmt):
         "Footnote-reference run for a sup>a.footnote-ref, or None when `el` is an ordinary sup"
-        children = _els(el)
+        children = el.element_children
         a = children[0] if len(children) == 1 and _tag(children[0]) == 'a' else None
-        if a is None or 'footnote-ref' not in _classes(a): return None
+        if a is None or not a.has_class('footnote-ref'): return None
         key = (_get(a, 'href') or '#')[1:]
         if key not in self.fndefs:
             self.warn(f'footnote reference #{key} has no definition; dropped')
@@ -346,7 +345,7 @@ class Converter:
     def inline_node(self, node, fmt):
         if isinstance(node, Text): return self.text_runs(node.text, fmt)
         if isinstance(node, Element):
-            if _tag(node) == 'a' and 'footnote-backref' in _classes(node): return []
+            if _tag(node) == 'a' and node.has_class('footnote-backref'): return []
             return self.inline(node, fmt)
         return []
 
@@ -365,8 +364,8 @@ class Converter:
 
     def codeblock(self, el):
         "Source Code paragraph, lines joined with w:br; Hl* character styles when a language class names one"
-        children = _els(el)
-        code = children[0] if children and _tag(children[0]) == 'code' else el
+        children = el.element_children
+        code = children[0] if children and children[0].is_tag('code') else el
         lang = next((c.removeprefix('language-') for c in _classes(code) if c.startswith('language-')), None)
         text = code.to_text().rstrip('\n')
         segs = (segments(text, lang) if self.hlstyles else None) or [(text, None)]
@@ -390,7 +389,7 @@ class Converter:
         self._numid += 1
         nid = self._numid
         self.nums.append((nid, 0 if _tag(el) == 'ul' else 1, int(_get(el, 'start', 1))))
-        return [b for li in _els(el) if _tag(li) == 'li' for b in self.li(li, nid, min(ilvl, 8))]
+        return [b for li in el.element_children if _tag(li) == 'li' for b in self.li(li, nid, min(ilvl, 8))]
 
     def li_parts(self, el):
         "Split mixed li content into ('inline', [nodes]) groups and ('block', child) items, in order"
@@ -433,7 +432,7 @@ class Converter:
                     ci += wd
                 return ci
             ci = _skip(ci)
-            for cell in _els(tr):
+            for cell in tr.element_children:
                 if _tag(cell) not in ('td', 'th'): continue
                 cs, rs = int(_get(cell, 'colspan', 1)), int(_get(cell, 'rowspan', 1))
                 rowcells.append(('cell', ci, cell, cs, rs))
@@ -459,7 +458,7 @@ class Converter:
 
     def cell_blocks(self, cell, header):
         "Block content of one table cell; header cells bold, align attr honored for inline cells"
-        if any(_tag(c) in BLOCK_TAGS for c in _els(cell)): return self.blocks(cell)
+        if any(_tag(c) in BLOCK_TAGS for c in cell.element_children): return self.blocks(cell)
         jc = [E('w:jc', {'w:val': _get(cell, 'align')})] if _get(cell, 'align') in ('center', 'right') else None
         return [self.para(self.runs(cell, {'b': True} if header else {}), 'compact', jc)]
 
@@ -471,14 +470,14 @@ class Converter:
             "Rows in order; template markers recorded at the row index they precede"
             if _tag(c) == 'template': markers.setdefault(len(rows), []).append(c)
             else: rows.append(c)
-        for sec in _els(el):
+        for sec in el.element_children:
             t = _tag(sec)
             if t == 'caption': cap = sec
             elif t == 'thead':
-                for c in _els(sec): _add(c)
+                for c in sec.element_children: _add(c)
                 nhead = len(rows)
             elif t in ('tbody', 'tfoot'):
-                for c in _els(sec): _add(c)
+                for c in sec.element_children: _add(c)
             elif t in ('tr', 'template'): _add(sec)
         if nhead and not any(tr.to_text().strip() for tr in rows[:nhead]):
             # a markdown pipe table cannot omit its header row, so an all-empty thead means "headerless"
@@ -556,7 +555,7 @@ class Converter:
     def figure(self, el):
         "Figure: image paragraph, then its numbered caption paragraph below (Word convention)"
         img = next((c for c in _walk(el) if _tag(c) == 'img'), None)
-        capel = next((c for c in _els(el) if _tag(c) == 'figcaption'), None)
+        capel = next((c for c in el.element_children if _tag(c) == 'figcaption'), None)
         alt = capel.to_text().strip() if capel is not None else None
         out = [] if img is None else [self.para(self.image(img, {}, alt), 'body')]
         return out + self.caption_para(el, 'fig', capel)
@@ -569,7 +568,7 @@ class Converter:
         "Block elements for `el` (one element may yield several); `sid` is a custom-style id override for paragraphs"
         out = self._block(el, style, sid)
         tag = _tag(el)
-        if tag in self.FIRST_AFTER or (tag == 'div' and 'display' in _classes(el)): self.first = True
+        if tag in self.FIRST_AFTER or (tag == 'div' and el.has_class('display')): self.first = True
         return out
 
     def _block(self, el, style, sid):
@@ -596,13 +595,13 @@ class Converter:
         if tag == 'figure': return self.figure(el)
         if tag == 'template': return [self.para(runs)] if (runs := self.tmpl_runs(el, {}, 'block')) else []
         if tag == 'div':
-            cls = _classes(el)
-            if 'math' in cls and 'display' in cls: return [E('w:p', E('m:oMathPara', self.omath(el)))]
-            if 'details' in cls and (kids := _els(el)) and _tag(kids[0]) in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
-                label = self.para(self.runs(kids[0], {'b': True}), style)   # the dialect's collapsible block: label as a bold line, never a numbered heading
-                return [label, *self.block_nodes(kids[1:], style, sid)]
+            if (panel := panel_parts(el)) is not None:
+                title, body, label = panel
+                runs = self.bookmark(title, self.runs(title, {'b': True})) if title is not None else self.text_runs(label, {'b': True})
+                return ([self.para(runs, style)] if runs else []) + self.block_nodes(body, style, sid)
+            if el.has_class('math') and el.has_class('display'): return [E('w:p', E('m:oMathPara', self.omath(el)))]
             return self.blocks(el, style, self.custom_style(el, 'paragraph') or sid)
-        if tag in BLOCK_TAGS and any(_tag(c) in BLOCK_TAGS for c in _els(el)):
+        if tag in BLOCK_TAGS and any(_tag(c) in BLOCK_TAGS for c in el.element_children):
             return self.blocks(el, style, sid)   # unknown container: recurse
         self.warn(f'unhandled block <{tag}>; emitted as plain paragraph')
         return [self.para(self.runs(el, {}), style, None, sid)]
@@ -660,11 +659,11 @@ class Converter:
     def dl(self, el):
         "Definition list: dt/dd paragraphs in their dialect styles"
         out = []
-        for c in _els(el):
+        for c in el.element_children:
             t = _tag(c)
             if t == 'dt': out.append(self.para(self.bookmark(c, self.runs(c, {})), 'dt'))
             elif t == 'dd':
-                blocky = any(_tag(k) in BLOCK_TAGS for k in _els(c))
+                blocky = any(_tag(k) in BLOCK_TAGS for k in c.element_children)
                 out += self.blocks(c, 'dd') if blocky else [self.para(self.runs(c, {}), 'dd')]
         return out
 
@@ -858,7 +857,7 @@ class Converter:
         "Split out footnote endnote sections, indexing their li definitions by id; returns body elements"
         body, fn = [], []
         for el in els:
-            is_notes = isinstance(el, Element) and _tag(el) == 'section' and 'footnotes' in _classes(el)
+            is_notes = isinstance(el, Element) and _tag(el) == 'section' and el.has_class('footnotes')
             (fn if is_notes else body).append(el)
         self.fndefs.update({_get(li, 'id'): li for sec in fn for li in _walk(sec) if _tag(li) == 'li' and _get(li, 'id')})
         return body
