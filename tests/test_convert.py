@@ -576,11 +576,12 @@ def test_list_paragraph_bookmarks(tmp_path):
 def test_scoped_reference_group(tmp_path):
     from lxml import etree
     out = tmp_path/'scopes.docx'
-    src = ''.join(f'<div class="include" scope="{scope}"><h1>{title}</h1><h2 id="sec-setup">Setup</h2>'
-        '<p>See <a href="#sec-setup" data-ref=""></a>.</p></div>'
-        for scope, title in [('mic', 'Microphone'), ('speaker', 'Speaker')])
-    src += '<p>Compare <span data-refs><a href="#mic:sec-setup" data-ref></a>' \
-        '<a href="#speaker:sec-setup" data-ref></a></span>.</p>'
+    md = '\n\n'.join(f'::: {{.include scope="{scope}"}}\n# {title}\n\n## Setup {{#sec-setup}}\n\n'
+        'See [@sec-setup].\n:::' for scope, title in [('mic', 'Microphone'), ('speaker', 'Speaker')])
+    md += '\n\nCompare [@mic:sec-setup; @speaker:sec-setup].'
+    src = md2mdhtml(md)
+    assert 'id="mic:sec-setup"' in src and 'id="speaker:sec-setup"' in src
+    assert 'id="sec-setup"' not in src
     teq(mdhtml2docx(src, out, number_headings='decimal'), [])
     teq(fast_checks(out), 'valid')
     with zipfile.ZipFile(out) as z: root = etree.fromstring(z.read('word/document.xml'))
