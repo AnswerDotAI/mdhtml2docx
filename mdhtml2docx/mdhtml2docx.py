@@ -4,7 +4,7 @@ Write-only, reference-archive architecture: the reference template supplies styl
 we generate word/document.xml (plus footnotes/numbering/media parts as needed) into a copy of its
 archive. Block and inline walkers mirror the MDHTML element inventory; STYLE_MAP names every
 style we emit."""
-import posixpath, re, zipfile
+import hashlib, posixpath, re, zipfile
 from copy import deepcopy
 from pathlib import Path
 from fast5ever import Comment, Element, Node, Text
@@ -190,6 +190,7 @@ class Converter:
         if id not in self._bknames:
             nm = re.sub(r'\W', '_', id)
             if not nm[:1].isalpha(): nm = 'B' + nm
+            if len(nm) > 38: nm = nm[:27] + '_' + hashlib.sha256(id.encode()).hexdigest()[:10]
             while nm in self._bknames.values(): nm += '_'
             self._bknames[id] = nm
         return self._bknames[id]
@@ -415,7 +416,7 @@ class Converter:
         for kind, val in self.li_parts(li):
             if kind == 'inline': out.append(self.para(self.group_runs(val, {}), 'list', numpr if not out else cont))
             elif _tag(val) in ('ul', 'ol'): out += self.list_el(val, ilvl + 1)
-            elif _tag(val) == 'p': out.append(self.para(self.runs(val, {}), 'list', numpr if not out else cont))
+            elif _tag(val) == 'p': out.append(self.para(self.bookmark(val, self.runs(val, {})), 'list', numpr if not out else cont))
             else: out += self.block(val, 'list')
         return out or [self.para([], 'list', numpr)]
 

@@ -560,3 +560,35 @@ def test_panel_contract(tmp_path, state):
     assert 'label' in text and 'Body text' in text and 'More body' in text
     assert '## Actual heading' in text  # h1 maps to Word's Title; h3 maps to Heading 2
     assert not any(line.startswith('#') and 'label' in line for line in text.splitlines())
+
+def test_list_paragraph_bookmarks(tmp_path):
+    from lxml import etree
+    out = tmp_path/'list-refs.docx'
+    md = '1. First item.\n   {: #sec-first}\n\n2. Second item.\n   {: #sec-second}\n\nSee [@sec-first].'
+    teq(mdhtml2docx(md2mdhtml(md), out), [])
+    with zipfile.ZipFile(out) as z: root = etree.fromstring(z.read('word/document.xml'))
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    names = root.xpath('//w:bookmarkStart/@w:name', namespaces=ns)
+    assert {'sec_first', 'sec_second'} <= set(names)
+    teq(fast_checks(out), 'valid')
+
+
+def test_scoped_reference_group(tmp_path):
+    from lxml import etree
+    out = tmp_path/'scopes.docx'
+    md = '\n\n'.join(f'::: {{.include scope="{scope}"}}\n# {title}\n\n## Setup {{#sec-setup}}\n\n'
+        'See [@sec-setup].\n:::' for scope, title in [('__mic', 'Microphone'), ('__speaker', 'Speaker')])
+    md += '\n\nCompare [@sec-setup__mic; @sec-setup__speaker].'
+    src = md2mdhtml(md)
+    assert 'id="sec-setup__mic"' in src and 'id="sec-setup__speaker"' in src
+    assert 'id="sec-setup"' not in src
+    teq(mdhtml2docx(src, out, number_headings='decimal'), [])
+    teq(fast_checks(out), 'valid')
+    with zipfile.ZipFile(out) as z: root = etree.fromstring(z.read('word/document.xml'))
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    assert {'sec_setup__mic', 'sec_setup__speaker'} <= set(root.xpath('//w:bookmarkStart/@w:name', namespaces=ns))
+    group = root.xpath('//w:p', namespaces=ns)[-1]
+    assert 'Sections ' in ''.join(group.xpath('.//w:t/text()', namespaces=ns))
+    fields = group.xpath('.//w:fldSimple/@w:instr', namespaces=ns)
+    assert any('REF sec_setup__mic ' in f for f in fields)
+    assert any('REF sec_setup__speaker ' in f for f in fields)

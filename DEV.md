@@ -30,3 +30,11 @@ pytest -q -m slow
 Table rows stay on one page by default. A row that does not fit in the remaining space moves to the next page. Tables can span pages. Rows taller than a page can still split.
 
 Add `{: keep-rows=false}` directly below a Markdown table to allow its rows to split. `{: keep-rows=true}` explicitly selects the default. The converter writes Word's `cantSplit` setting on each row. The false override disables that setting even when a table style enables it.
+
+## Included documents
+
+The Markdown-to-MDHTML stage appends the scope to local IDs in an include. With `scope="__mic"`, `sec-setup` becomes `sec-setup__mic`. Links within the include use the suffixed ID. A link outside the include can use that full ID. Each include needs a unique scope suffix. MDHTML input must already contain the suffixed IDs and links. The DOCX converter uses those IDs without applying scopes.
+
+Each document starts with an h1 title. Word's existing heading numbering restarts after each h1. All included documents use the same numbering scheme selected for the export.
+
+Grouped references retain their type across scopes. References to `sec-setup__mic` and `sec-setup__speaker` share the prefix "Sections". Paragraph IDs in lists remain available as Word bookmarks. Long bookmark names are shortened to fit Word's limit.
