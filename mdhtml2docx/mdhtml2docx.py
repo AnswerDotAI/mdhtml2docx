@@ -10,7 +10,6 @@ from pathlib import Path
 from fast5ever import Comment, Element, Node, Text
 from lxml import etree
 from mdhtml import mdhtml2dom
-from mdhtml.scopes import scope_ids
 from mdhtml.export import REFTYPES, SCHEMES, decode_raw, tmpl_node, group_plan, ref_tokens, ref_variant, target_kind, Resolver, panel_parts
 from .styles import STYLE_MAP, style_id, theme_styles
 from .styles import ref_path as _refpath
@@ -865,7 +864,7 @@ class Converter:
         return body
 
     def to_docx(self, mdhtml, dest):
-        root = scope_ids(parse_frag(mdhtml))
+        root = parse_frag(mdhtml)
         nodes = self.harvest_footnotes(root.children)
         self.idtext, self.reftarget, self.res = {}, {}, Resolver(self.reftypes)
         for e in (e for node in nodes if isinstance(node, Element) for e in _walk(node)):

@@ -33,7 +33,7 @@ Add `{: keep-rows=false}` directly below a Markdown table to allow its rows to s
 
 ## Included documents
 
-A `div.include` with `scope="mic"` prefixes each local ID verbatim. For example, `sec-setup` becomes `mic:sec-setup`. Links within the include use the prefixed ID. A link outside the include can use that full ID. Scope names must be unique.
+The Markdown-to-MDHTML stage prefixes local IDs in an include with its scope. For example, `sec-setup` becomes `mic:sec-setup`. Links within the include use the prefixed ID. A link outside the include can use that full ID. Scope names must be unique. MDHTML input must already contain the prefixed IDs and links. The DOCX converter uses those IDs without applying scopes.
 
 Each document starts with an h1 title. Word's existing heading numbering restarts after each h1. All included documents use the same numbering scheme selected for the export.
 
