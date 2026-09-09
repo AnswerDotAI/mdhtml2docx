@@ -33,8 +33,8 @@ Add `{: keep-rows=false}` directly below a Markdown table to allow its rows to s
 
 ## Included documents
 
-The Markdown-to-MDHTML stage prefixes local IDs in an include with its scope. With `scope="mic__"`, `sec-setup` becomes `mic__sec-setup`. Links within the include use the prefixed ID. A link outside the include can use that full ID. Each include needs a unique scope prefix. MDHTML input must already contain the prefixed IDs and links. The DOCX converter uses those IDs without applying scopes.
+The Markdown-to-MDHTML stage appends the scope to local IDs in an include. With `scope="__mic"`, `sec-setup` becomes `sec-setup__mic`. Links within the include use the suffixed ID. A link outside the include can use that full ID. Each include needs a unique scope suffix. MDHTML input must already contain the suffixed IDs and links. The DOCX converter uses those IDs without applying scopes.
 
 Each document starts with an h1 title. Word's existing heading numbering restarts after each h1. All included documents use the same numbering scheme selected for the export.
 
-Grouped references retain their type across scopes. References to `mic__sec-setup` and `speaker__sec-setup` share the prefix "Sections". Paragraph IDs in lists remain available as Word bookmarks. Long bookmark names are shortened to fit Word's limit.
+Grouped references retain their type across scopes. References to `sec-setup__mic` and `sec-setup__speaker` share the prefix "Sections". Paragraph IDs in lists remain available as Word bookmarks. Long bookmark names are shortened to fit Word's limit.

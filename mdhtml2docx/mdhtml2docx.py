@@ -225,7 +225,7 @@ class Converter:
     def ref_group(self, el, fmt):
         "data-refs span: one pluralized prefix for a same-type group, per-item singular prefixes for mixed types; never range-collapsed"
         refs = [c for c in el.element_children if _tag(c) == 'a']
-        types = [(_get(a, 'href') or '#')[1:].rsplit('__', 1)[-1].split('-', 1)[0] for a in refs]
+        types = [(_get(a, 'href') or '#')[1:].split('-')[0] for a in refs]
         out = []
         for (sep, pre, plural), a in zip(group_plan(types), refs):
             if sep: out += self.text_runs(sep, fmt)
