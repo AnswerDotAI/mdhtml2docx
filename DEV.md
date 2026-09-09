@@ -30,3 +30,9 @@ pytest -q -m slow
 Table rows stay on one page by default. A row that does not fit in the remaining space moves to the next page. Tables can span pages. Rows taller than a page can still split.
 
 Add `{: keep-rows=false}` directly below a Markdown table to allow its rows to split. `{: keep-rows=true}` explicitly selects the default. The converter writes Word's `cantSplit` setting on each row. The false override disables that setting even when a table style enables it.
+
+## Paragraph pagination
+
+A paragraph may use `{: keep-with-next=true}` to stay with the next paragraph. `{: keep-with-next=false}` overrides an inherited setting. A `.keep-together` div keeps its consecutive paragraphs together. Keep complete lists and fenced blocks within one notebook note because notes render independently.
+
+A page-break-only paragraph after a table is transferred to the following paragraph to avoid an empty page. Every list continuation paragraph retains the list indentation.
