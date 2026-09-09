@@ -549,33 +549,17 @@ def test_table_row_page_breaks(tmp_path, attr, keep):
     teq(len(root.xpath('//w:tr/w:trPr/w:tblHeader', namespaces=ns)), 1)
 
 
-
-def test_list_continuation_paragraphs_keep_their_indent(tmp_path):
-    from lxml import etree
-    out = tmp_path/'continuations.docx'
-    html = '<ol><li>Outer<ol><li>Middle<ol><li><p>Lead</p>'
-    html += ''.join(f'<p>({c}) Continuation</p>' for c in 'ABCD')
-    html += '</li></ol></li></ol></li></ol>'
-    teq(mdhtml2docx(html, out), [])
-    with zipfile.ZipFile(out) as z: root = etree.fromstring(z.read('word/document.xml'))
-    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-    paras = root.xpath('//w:p[w:r/w:t[contains(.,"Continuation")]]', namespaces=ns)
-    teq([p.xpath('w:pPr/w:ind/@w:left', namespaces=ns) for p in paras], [['2160']] * 4)
-    teq(fast_checks(out), 'valid')
-
-
-
-def test_paragraph_keep_with_next_attribute(tmp_path):
-    from lxml import etree
-    out = tmp_path/'keep-next.docx'
-    md = 'Closing paragraph.\n{: keep-with-next=true}\n\nNotice.\n{: keep-with-next=false}'
-    teq(mdhtml2docx(md2mdhtml(md), out), [])
-    with zipfile.ZipFile(out) as z: root = etree.fromstring(z.read('word/document.xml'))
-    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-    teq(root.xpath('//w:p/w:pPr/w:keepNext/@w:val', namespaces=ns), ['1', '0'])
-    teq(fast_checks(out), 'valid')
-
-
+@pytest.mark.parametrize('state', ['fixed', 'open', 'closed'])
+def test_panel_contract(tmp_path, state):
+    out = tmp_path/'panel.docx'
+    src = (f'<div data-panel data-callout="warning" data-disclosure="{state}">'
+           '<header id="label">The <em>label</em></header>Body text<p>More body</p><h3>Actual heading</h3></div>')
+    assert not mdhtml2docx(src, out)
+    assert fast_checks(out) == 'valid'
+    text = pandoc(out)
+    assert 'label' in text and 'Body text' in text and 'More body' in text
+    assert '## Actual heading' in text  # h1 maps to Word's Title; h3 maps to Heading 2
+    assert not any(line.startswith('#') and 'label' in line for line in text.splitlines())
 
 def test_list_paragraph_bookmarks(tmp_path):
     from lxml import etree
@@ -589,14 +573,21 @@ def test_list_paragraph_bookmarks(tmp_path):
     teq(fast_checks(out), 'valid')
 
 
-@pytest.mark.parametrize('state', ['fixed', 'open', 'closed'])
-def test_panel_contract(tmp_path, state):
-    out = tmp_path/'panel.docx'
-    src = (f'<div data-panel data-callout="warning" data-disclosure="{state}">'
-           '<header id="label">The <em>label</em></header>Body text<p>More body</p><h3>Actual heading</h3></div>')
-    assert not mdhtml2docx(src, out)
-    assert fast_checks(out) == 'valid'
-    text = pandoc(out)
-    assert 'label' in text and 'Body text' in text and 'More body' in text
-    assert '## Actual heading' in text  # h1 maps to Word's Title; h3 maps to Heading 2
-    assert not any(line.startswith('#') and 'label' in line for line in text.splitlines())
+def test_scoped_reference_group(tmp_path):
+    from lxml import etree
+    out = tmp_path/'scopes.docx'
+    src = ''.join(f'<div class="include" scope="{scope}"><h1>{title}</h1><h2 id="sec-setup">Setup</h2>'
+        '<p>See <a href="#sec-setup" data-ref=""></a>.</p></div>'
+        for scope, title in [('mic', 'Microphone'), ('speaker', 'Speaker')])
+    src += '<p>Compare <span data-refs><a href="#mic:sec-setup" data-ref></a>' \
+        '<a href="#speaker:sec-setup" data-ref></a></span>.</p>'
+    teq(mdhtml2docx(src, out, number_headings='decimal'), [])
+    teq(fast_checks(out), 'valid')
+    with zipfile.ZipFile(out) as z: root = etree.fromstring(z.read('word/document.xml'))
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    assert {'mic_sec_setup', 'speaker_sec_setup'} <= set(root.xpath('//w:bookmarkStart/@w:name', namespaces=ns))
+    group = root.xpath('//w:p', namespaces=ns)[-1]
+    assert 'Sections ' in ''.join(group.xpath('.//w:t/text()', namespaces=ns))
+    fields = group.xpath('.//w:fldSimple/@w:instr', namespaces=ns)
+    assert any('REF mic_sec_setup ' in f for f in fields)
+    assert any('REF speaker_sec_setup ' in f for f in fields)

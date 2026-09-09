@@ -31,14 +31,10 @@ Table rows stay on one page by default. A row that does not fit in the remaining
 
 Add `{: keep-rows=false}` directly below a Markdown table to allow its rows to split. `{: keep-rows=true}` explicitly selects the default. The converter writes Word's `cantSplit` setting on each row. The false override disables that setting even when a table style enables it.
 
-
 ## Included documents
 
-A `div.include` with a unique `scope` attribute gives local reference names to an included document. IDs retain their type prefix. For example, `sec-notices` under scope `rsa.` becomes `sec-rsa.notices`. Links to targets inside the include follow the renamed IDs. External targets are unchanged.
+A `div.include` with `scope="mic"` prefixes each local ID verbatim. For example, `sec-setup` becomes `mic:sec-setup`. Links within the include use the prefixed ID. A link outside the include can use that full ID. Scope names must be unique.
 
-A div's `number-headings` attribute selects `decimal`, `legal`, or `false` for its contents. Each numbered div owns a Word numbering instance. The enclosing numbering resumes after the div. Heading pagination remains controlled by the reference styles.
+Each document starts with an h1 title. Word's existing heading numbering restarts after each h1. All included documents use the same numbering scheme selected for the export.
 
-A `.keep-together` div keeps its consecutive paragraphs together. A page-break-only paragraph after a table is transferred to the following paragraph to avoid an empty page. List continuation paragraphs receive independent indentation properties.
-
-
-A paragraph may use `{: keep-with-next=true}` to stay with the next paragraph. `{: keep-with-next=false}` overrides an inherited setting. The attribute attaches to that paragraph without a container. Notebook authors should keep complete lists and fenced blocks within one note because notes render independently.
+Grouped references retain their type across scopes. References to `mic:sec-setup` and `speaker:sec-setup` share the prefix "Sections". Paragraph IDs in lists remain available as Word bookmarks. Long bookmark names are shortened to fit Word's limit.
