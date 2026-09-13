@@ -1,5 +1,14 @@
 <!-- do not remove -->
 
+## 0.1.4
+
+### New Features
+
+- Replace lxml with oxml for WordprocessingML construction, reference editing, and docx packaging ([#18](https://github.com/AnswerDotAI/mdhtml2docx/issues/18))
+- Adopt mdhtml `panel_parts` and fast5ever element helpers, giving panels a shared contract and adjacent lists independent numbering ([#16](https://github.com/AnswerDotAI/mdhtml2docx/issues/16))
+- Treat h1 as Title, restyle the default reference, add span ref targets ([#9](https://github.com/AnswerDotAI/mdhtml2docx/pull/9)), thanks to [@ncoop57](https://github.com/ncoop57)
+
+
 ## 0.1.3
 
 
