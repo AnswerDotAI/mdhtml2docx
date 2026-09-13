@@ -1,8 +1,9 @@
 "Fast validity checks for docx: container, per-entry CRC, XML parse, then ECMA-376 schema validation after MCE stripping."
-import zipfile
+import posixpath, zipfile
 from functools import cache
 from importlib.resources import files
-from lxml import etree
+try: from lxml import etree
+except ImportError as e: raise ImportError('Schema validation requires mdhtml2docx[validation]') from e
 
 __all__ = ['wml_schema', 'mce_strip', 'fast_checks']
 
@@ -32,7 +33,10 @@ def fast_checks(path):
     try:
         if (b := z.testzip()): return f'crc: bad entry {b}'
     except Exception as e: return f'crc: {e}'
-    try: doc = mce_strip(etree.fromstring(z.read('word/document.xml')))
+    try:
+        rels = etree.fromstring(z.read('_rels/.rels'))
+        target = next(r.get('Target') for r in rels if r.get('Type', '').endswith('/officeDocument') and r.get('TargetMode') != 'External')
+        doc = mce_strip(etree.fromstring(z.read(posixpath.normpath('/' + target).lstrip('/'))))
     except Exception as e: return f'xml: {e}'
     s = wml_schema()
     return 'valid' if s.validate(doc) else f'schema: {s.error_log.filter_from_errors()[0]}'

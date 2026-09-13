@@ -1,12 +1,12 @@
-"""WordprocessingML construction helpers: namespaces, a qualified-name element builder, unit
+"""WordprocessingML construction helpers: namespaces, oxml expressions, unit
 conversions, and the colwidths track-list parser. Child-element order inside w:pPr/w:rPr/w:tcPr
 etc follows the ECMA-376 content models; builders here emit children in the order callers pass
 them, so callers are responsible for schema order (the mdhtml2docx module's helpers encode it)."""
 import re, struct
 from xml.sax.saxutils import escape
-from lxml import etree
+from oxml import E, e, Tree
 
-__all__ = ['W', 'R', 'WP', 'A', 'PIC', 'NS', 'qn', 'E', 'twips', 'parse_tracks', 'EMU_PER_PX', 'imgsize', 'drawing']
+__all__ = ['W', 'R', 'WP', 'A', 'PIC', 'NS', 'E', 'e', 'wchild', 'wpos', 'twips', 'parse_tracks', 'EMU_PER_PX', 'imgsize', 'drawing']
 
 W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
@@ -17,24 +17,14 @@ M = 'http://schemas.openxmlformats.org/officeDocument/2006/math'
 XML = 'http://www.w3.org/XML/1998/namespace'
 NS = dict(w=W, r=R, wp=WP, a=A, pic=PIC, m=M, xml=XML)
 
-def qn(name):
-    "Clark-notation name for a `prefix:local` string, e.g. 'w:p' -> '{...main}p'"
-    pre, local = name.split(':')
-    return f'{{{NS[pre]}}}{local}'
+def wchild(el, name):
+    "First direct WordprocessingML child named `name`, or None"
+    return next((c for c in el.children if c.raw['qname'] == (W, name)), None) if el is not None else None
 
-def E(tag, *children, **attrs):
-    """Build element `tag` ('w:p' form). `children` may be elements (appended), dicts (attrs with
-    'w:val'-form keys), or strings (text). Underscores in kwarg names are hyphens ('w_val' unusable
-    for ':' so kwargs are unqualified attrs; use dicts for qualified ones)."""
-    e = etree.Element(qn(tag) if ':' in tag else tag)
-    for k, v in attrs.items(): e.set(k, str(v))
-    for c in children:
-        if c is None: continue
-        if isinstance(c, dict):
-            for k, v in c.items(): e.set(qn(k) if ':' in k else k, str(v))
-        elif isinstance(c, str): e.text = (e.text or '') + c
-        else: e.append(c)
-    return e
+def wpos(el, names):
+    "Content index before the first WordprocessingML child in `names`, or at the end"
+    ids = el.raw['children']
+    return next((ids.index(c.node_id) for c in el.children if c.raw['qname'][0] == W and c.raw['qname'][1] in names), len(ids))
 
 # CSS length units in twips (1/20 pt). em/rem/ch use the template body size (11pt Aptos/Calibri).
 UNITS = dict(pt=20, px=15, pc=240, em=220, rem=220, ch=110)
@@ -106,5 +96,5 @@ DRAWING = r'''<w:drawing xmlns:w="{W}" xmlns:wp="{WP}" xmlns:a="{A}" xmlns:pic="
 
 def drawing(rid, n, cx, cy, descr=''):
     "A w:drawing (inline picture) element: relationship `rid`, unique docPr id `n`, extent in EMU"
-    return etree.fromstring(DRAWING.format(W=W, WP=WP, A=A, P=PIC, R=R, rid=rid, n=n, cx=cx, cy=cy,
-        descr=escape(descr, {'"': '&quot;'})))
+    return Tree(DRAWING.format(W=W, WP=WP, A=A, P=PIC, R=R, rid=rid, n=n, cx=cx, cy=cy,
+        descr=escape(descr, {'"': '&quot;'})).encode()).root

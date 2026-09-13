@@ -27,59 +27,38 @@ def theme_styles(theme):
     for scope 'keyword.function', reversibly), plus a Source Code paragraph style carrying the theme's
     code-block background and default color (mirroring the template's, so later-wins merge replaces it)"""
     from fastpylight import theme_colors
-    from .wml import E
+    from .wml import e
     tc = theme_colors(theme)
     nrm = tc.pop('normal', {})
     def rpr(st):
-        return E('w:rPr', E('w:b') if st['bold'] else None, E('w:i') if st['italic'] else None,  # chkstyle: ignore-node
-            E('w:strike') if st['strikethrough'] else None,
-            E('w:color', {'w:val': _hx(st['fg'])}) if st['fg'] else None,
-            E('w:u', {'w:val': _ULINE[st['underline']]}) if st['underline'] else None,
-            E('w:shd', {'w:val': 'clear', 'w:color': 'auto', 'w:fill': _hx(st['bg'])}) if st['bg'] else None)
+        return e.rPr(e.b() if st['bold'] else None, e.i() if st['italic'] else None,  # chkstyle: ignore-node
+            e.strike() if st['strikethrough'] else None,
+            e.color(val=_hx(st['fg'])) if st['fg'] else None,
+            e.u(val=_ULINE[st['underline']]) if st['underline'] else None,
+            e.shd(val='clear', color='auto', fill=_hx(st['bg'])) if st['bg'] else None)
     def sty(scope, st):
         name = ('hl ' + scope.replace('.', ' ')).title()
-        return E('w:style', {'w:type': 'character', 'w:customStyle': 1, 'w:styleId': style_id(name)},
-            E('w:name', {'w:val': name}), E('w:basedOn', {'w:val': 'DefaultParagraphFont'}), rpr(st))
-    mono = {'w:ascii': 'Consolas', 'w:hAnsi': 'Consolas', 'w:cs': 'Consolas'}
-    sc = E('w:style', {'w:type': 'paragraph', 'w:styleId': 'SourceCode'},
-        E('w:name', {'w:val': 'Source Code'}), E('w:basedOn', {'w:val': 'Normal'}),
-        E('w:next', {'w:val': 'FirstParagraph'}), E('w:uiPriority', {'w:val': 1}), E('w:qFormat'),
-        E('w:pPr', E('w:keepLines'), E('w:spacing', {'w:before': 120, 'w:after': 120}),
-            E('w:shd', {'w:val': 'clear', 'w:color': 'auto', 'w:fill': _hx(nrm.get('bg') or '#F5F5F5')})),
-        E('w:rPr', E('w:rFonts', mono),
-            E('w:color', {'w:val': _hx(nrm['fg'])}) if nrm.get('fg') else None,
-            E('w:sz', {'w:val': 20}), E('w:szCs', {'w:val': 20})))
+        return e.style(e.name(val=name), e.basedOn(val='DefaultParagraphFont'),
+            rpr(st), type='character', customStyle=1, styleId=style_id(name))
+    sc = e.style(
+        e.name(val='Source Code'), e.basedOn(val='Normal'),
+        e.next(val='FirstParagraph'), e.uiPriority(val=1), e.qFormat(),
+        e.pPr(e.keepLines(),
+            e.shd(val='clear', color='auto', fill=_hx(nrm.get('bg') or '#F5F5F5')),
+            e.spacing(before=120, after=120)),
+        e.rPr(e.rFonts(ascii='Consolas', hAnsi='Consolas', cs='Consolas'),
+            e.color(val=_hx(nrm['fg'])) if nrm.get('fg') else None,
+            e.sz(val=20), e.szCs(val=20)), type='paragraph', styleId='SourceCode')
     return [sc] + [sty(s, st) for s, st in sorted(tc.items())]
-
-_CT = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="xml" ContentType="application/xml"/>
-<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
-</Types>'''
-_RELS = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>'''
-_DOCRELS = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-</Relationships>'''
 
 def theme_ref(theme, dest):
     "Write a minimal, Word-openable reference docx at `dest` carrying only `theme`'s styles, for use as a later `reference` entry"
-    import zipfile
-    from lxml import etree
-    from .wml import W, qn
-    sroot = etree.Element(qn('w:styles'), nsmap={'w': W})
-    for s in theme_styles(theme): sroot.append(s)
-    doc = etree.Element(qn('w:document'), nsmap={'w': W})
-    etree.SubElement(doc, qn('w:body')).append(etree.Element(qn('w:p')))
-    with zipfile.ZipFile(dest, 'w', zipfile.ZIP_DEFLATED) as z:
-        z.writestr('[Content_Types].xml', _CT)
-        z.writestr('_rels/.rels', _RELS)
-        z.writestr('word/_rels/document.xml.rels', _DOCRELS)
-        z.writestr('word/document.xml', etree.tostring(doc, xml_declaration=True, encoding='UTF-8', standalone=True))
-        z.writestr('word/styles.xml', etree.tostring(sroot, xml_declaration=True, encoding='UTF-8', standalone=True))
+    from oxml import Document
+    from .wml import R, e
+    document = Document.new()
+    document.main.replace(e.document(e.body(e.p())).bytes())
+    document.package.add_part('/word/styles.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml',
+        e.styles(*theme_styles(theme)).bytes())
+    document.package.add_relationship(document.package.main_part, f'{R}/styles', 'styles.xml')
+    document.save(dest)
     return dest

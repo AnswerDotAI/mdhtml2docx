@@ -2,7 +2,7 @@
 
 Convert [MDHTML](https://github.com/AnswerDotAI/mdhtml) to Word docx files.
 
-`mdhtml` renders Markdown to an HTML5 document format shared by format-specific exporters. `mdhtml2docx` converts its portable core to docx from scratch. It uses [fast5ever](https://github.com/AnswerDotAI/fast5ever)'s mutable WHATWG DOM for input and lxml to generate WordprocessingML.
+`mdhtml` renders Markdown to an HTML5 document format shared by format-specific exporters. `mdhtml2docx` converts its portable core to docx from scratch. It uses [fast5ever](https://github.com/AnswerDotAI/fast5ever)'s mutable WHATWG DOM for input and `oxml` for WordprocessingML construction, reference editing, DOCX packaging, and atomic saving. XML construction uses namespace-bound factories such as `e.tcW(type='dxa', w=2400)`, backed by fastcore's XML builder. Conversion requires neither lxml nor a .NET or Office runtime.
 
 MDHTML accepts the full HTML vocabulary. This exporter supports the elements and annotations listed below. It preserves the text of unknown inline elements and recurses through block containers. It returns a warning when an unsupported block must become a plain paragraph. HTML parsing and repair belong to `mdhtml`.
 
@@ -62,6 +62,8 @@ Prose uses Body Text. The first paragraph after a heading or similar block uses 
 ### Reference documents and themes
 
 Pass `reference='mydoc.docx'` to use your own document's styles, as with Pandoc's `--reference-doc`.
+
+Reference parts are located through their relationships, not assumed filenames. Existing reference media and unrelated parts are preserved; new images receive non-colliding part names, and relationship IDs are allocated in each source part's scope.
 
 `reference` also accepts a list. The first entry supplies the document, including page setup, fonts, and base styles. Later entries contribute styles and replace earlier styles with the same name. Each can be another `.docx` or a fastpylight theme name such as `'dracula'`.
 
@@ -131,7 +133,7 @@ Otherwise, select a scheme with `number_headings`:
 
 The named schemes come from mdhtml's `SCHEMES`. The custom dictionary uses the same format as mdhtml.
 
-A reference-list entry ending in `.xml` can also supply styles and numbering. It contains raw `w:style`, `w:abstractNum`, and `w:num` elements. The converter remaps their ids to avoid collisions.
+A reference-list entry ending in `.xml` can also supply styles and numbering. It contains raw `w:style`, `w:abstractNum`, and `w:num` elements. Each contributor's ids and references are remapped before merging, so separate contributors can reuse the same original numbering ids; later styles still win.
 
 ### Figures and tables
 
@@ -144,5 +146,7 @@ When the element has an id, the converter bookmarks its label and number. `[@fig
 Reference targets must be headings, paragraphs, figures, or tables with ids. A reference to anything else raises a conversion error.
 
 ## Validation
+
+Independent schema validation is optional. Install `mdhtml2docx[validation]` to use `mdhtml2docx.validate.fast_checks(path)`; this extra requires lxml. Normal conversion does not import it.
 
 The test suite checks docx containers, CRCs, and XML, validates against the ECMA-376 schemas with lxml, and performs semantic round trips through Pandoc's independent docx reader. Periodic acceptance runs open documents in Microsoft Word through AppleScript.

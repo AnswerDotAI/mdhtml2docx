@@ -15,10 +15,13 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = ["lxml", "mdhtml>=0.1.39", "fast5ever>=0.1.5"]
+dependencies = ["mdhtml>=0.1.39", "fast5ever>=0.1.5", "oxml>=0.1.1"]
 
 [project.optional-dependencies]
+validation = ["lxml"]
 dev = [
+  "mdhtml2docx[validation]",
+  "pytest",
   "fastship",
   "build",
   "twine",

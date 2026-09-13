@@ -8,15 +8,16 @@ to exactly what STYLE_MAP needs, patches Quote for blockquote semantics (left in
 centering), authors the definitions Word leaves latent, scrubs personal metadata, and
 self-verifies: fast_checks == 'valid' and every STYLE_MAP name defined."""
 import zipfile
+from importlib.resources import files
 from lxml import etree
 from mdhtml2docx.styles import STYLE_MAP, style_id
-from mdhtml2docx.validate import fast_checks
+from mdhtml2docx.validate import fast_checks, mce_strip, wml_schema
 
 W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 
 def w(tag): return f'{{{W}}}{tag}'
 
-# Styles the seed defines that we keep as Word authored them. Everything else the seed defines is dropped.
+# Keep the seed's style definitions, correcting XML child order below; drop the rest.
 KEEP = {'Normal', 'DefaultParagraphFont', 'TableNormal', 'NoList', 'Quote', 'ListParagraph', 'Title',
     'Header', 'Footer', *[f'Heading{n}' for n in range(1, 7)]}
 
@@ -39,8 +40,8 @@ NEW_STYLES = r'''<w:styles xmlns:w="http://schemas.openxmlformats.org/wordproces
 </w:style>
 <w:style w:type="paragraph" w:styleId="SourceCode">
   <w:name w:val="Source Code"/><w:basedOn w:val="Normal"/><w:next w:val="FirstParagraph"/><w:uiPriority w:val="1"/><w:qFormat/>
-  <w:pPr><w:keepLines/><w:spacing w:before="120" w:after="120"/>
-    <w:shd w:val="clear" w:color="auto" w:fill="F5F5F5"/></w:pPr>
+  <w:pPr><w:keepLines/><w:shd w:val="clear" w:color="auto" w:fill="F5F5F5"/>
+    <w:spacing w:before="120" w:after="120"/></w:pPr>
   <w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>
 </w:style>
 <w:style w:type="character" w:styleId="VerbatimChar">
@@ -67,7 +68,7 @@ NEW_STYLES = r'''<w:styles xmlns:w="http://schemas.openxmlformats.org/wordproces
 </w:style>
 <w:style w:type="paragraph" w:customStyle="1" w:styleId="DefinitionTerm">
   <w:name w:val="Definition Term"/><w:basedOn w:val="Normal"/><w:next w:val="Definition"/><w:uiPriority w:val="1"/><w:qFormat/>
-  <w:pPr><w:spacing w:after="0"/><w:keepNext/></w:pPr>
+  <w:pPr><w:keepNext/><w:spacing w:after="0"/></w:pPr>
   <w:rPr><w:b/><w:bCs/></w:rPr>
 </w:style>
 <w:style w:type="paragraph" w:customStyle="1" w:styleId="Definition">
@@ -94,8 +95,10 @@ NEW_STYLES = r'''<w:styles xmlns:w="http://schemas.openxmlformats.org/wordproces
 
 
 def build_styles(xml):
-    "Strip the seed's styles.xml to KEEP, patch Quote, append the authored definitions"
+    "Keep and schema-order the seed's styles, patch Quote, append the authored definitions."
     root = etree.fromstring(xml)
+    schema = etree.parse(str(files('mdhtml2docx')/'schemas'/'wml.xsd'))
+    order = [w(e.get('name')) for e in schema.findall('.//{*}complexType[@name="CT_Style"]/{*}sequence/{*}element')]
     for s in list(root.iter(w('style'))):
         if s.get(w('styleId')) not in KEEP: root.remove(s)
     q = next(s for s in root.iter(w('style')) if s.get(w('styleId')) == 'Quote')
@@ -103,6 +106,7 @@ def build_styles(xml):
     qp.remove(qp.find(w('jc')))
     etree.SubElement(qp, w('ind')).set(w('left'), '720')
     for s in root.iter(w('style')):
+        s[:] = sorted(s, key=lambda e: order.index(e.tag))
         if s.get(w('styleId')) in ('Quote', 'Title', *[f'Heading{n}' for n in range(1, 7)]):
             s.find(w('next')).set(w('val'), 'FirstParagraph')   # typing after these continues our prose chain
     for s in etree.fromstring(NEW_STYLES.encode()): root.append(s)
@@ -146,6 +150,7 @@ def verify(path):
     assert r == 'valid', r
     z = zipfile.ZipFile(path)
     root = etree.fromstring(z.read('word/styles.xml'))
+    wml_schema().assertValid(mce_strip(root))
     names = {s.find(w('name')).get(w('val')) for s in root.iter(w('style'))}
     missing = set(STYLE_MAP.values()) - names
     assert not missing, f'STYLE_MAP styles not defined: {missing}'

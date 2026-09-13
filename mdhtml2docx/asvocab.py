@@ -3,7 +3,7 @@ import re
 from functools import cache
 from importlib.resources import files
 from aem import AEEnum
-from lxml import etree
+from xml.etree import ElementTree as etree
 
 __all__ = ['vocab', 'props', 'sd', 'sdfind']
 
@@ -80,9 +80,12 @@ def sdfind(pat, path=SDEF, maxlen=80):
     "Search sdef names and descriptions for regex `pat`, as (kind, name, description) rows; child nodes show as parent.name"
     r = re.compile(pat, re.I)
     res = []
-    for e in _sdef(path).iter(*_fmts, *_children):
+    root = _sdef(path)
+    parents = {c: p for p in root.iter() for c in p}
+    for e in root.iter():
+        if e.tag not in _fmts and e.tag not in _children: continue
         n, d = e.get('name') or '', e.get('description') or ''
         if not (r.search(n) or r.search(d)): continue
-        if e.tag in _children: n = f'{e.getparent().get("name")}.{n}'
+        if e.tag in _children: n = f'{parents[e].get("name")}.{n}'
         res.append((e.tag, n, d if len(d)<=maxlen else d[:maxlen]+'...'))
     return res
