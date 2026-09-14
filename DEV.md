@@ -38,11 +38,29 @@ pytest -q -m 'not slow'
 
 The no-lxml test checks only the dependency boundary: a minimal conversion in a fresh interpreter with lxml imports blocked. Feature behavior belongs in the normal converter tests, not a second suite embedded in a subprocess. `tools/createref.py` remains a development-only lxml user and requires the validation extra; it is not part of conversion.
 
-Regenerate the bundled reference with `python tools/createref.py` using `_data/empty.docx` as the seed. The generator orders the seed's style children from the bundled XSD and validates the resulting styles as well as the main document. Authored and theme styles emit their properties in schema order directly; conversion does not repair reference styles.
+Regenerate the bundled reference with `python tools/createref.py` using `_data/empty.docx` as the seed. The generator sorts the seed's style and section-property children into schema order with oxml's `reorder()` and validates the resulting styles as well as the main document. Authored and theme styles emit their properties in schema order directly; conversion does not repair reference styles.
 
+
+Prefer `doc.styles[id]`, `doc.numbering[id]`, typed `elements(...)` traversal, and attribute properties for test lookups. Use unpacking to assert exactly one match and `tree.count(cls)` for general counts. Keep independent XML checks where the assertion is about exact structure, ordering, or preservation rather than a scalar value.
+
+## Live Word checks
+
+`tools/check_docx.py` is a development-only tool, not part of the installed converter. It requires a separately installed `macscript` checkout and Microsoft Word on macOS; neither is a dependency of this package.
+
+From this checkout, with the file in a folder Word can access:
+
+```python
+from tools.check_docx import check_docx
+
+status, details = check_docx('_data/example.docx')
+```
+
+The checker runs `oxml.Document.validate()` before opening the file in Word. It returns `invalid` with validation errors, `clean` with body text, `recovered` with the repaired copy's text, or `corrupt` with dialog messages. It closes the document it opened. Word helpers and the bundled scripting dictionary now live in `macscript.word`; generic vocabulary exploration lives in `macscript.asvocab`.
 
 ## Table pagination
 
 Table rows stay on one page by default. A row that does not fit in the remaining space moves to the next page. Tables can span pages. Rows taller than a page can still split.
 
 Add `{: keep-rows=false}` directly below a Markdown table to allow its rows to split. `{: keep-rows=true}` explicitly selects the default. The converter writes Word's `cantSplit` setting on each row. The false override disables that setting even when a table style enables it.
+
+`cantSplit` uses `on`/`off`, the spellings accepted by the SDK's `OnOffOnlyValues` type. The reference generator also normalizes numeric `bidiVisual` values in the seed's header and footer to these spellings.

@@ -150,3 +150,5 @@ Reference targets must be headings, paragraphs, figures, or tables with ids. A r
 Independent schema validation is optional. Install `mdhtml2docx[validation]` to use `mdhtml2docx.validate.fast_checks(path)`; this extra requires lxml. Normal conversion does not import it.
 
 The test suite checks docx containers, CRCs, and XML, validates against the ECMA-376 schemas with lxml, and performs semantic round trips through Pandoc's independent docx reader. Periodic acceptance runs open documents in Microsoft Word through AppleScript.
+
+Live Word scripting is provided by [macscript](https://github.com/AnswerDotAI/macscript), not the converter. The development-only `tools/check_docx.py` combines `oxml` validation with a live Word acceptance check; see "Live Word checks" in [DEV.md](DEV.md). Normal installation and conversion do not require macscript or Office.

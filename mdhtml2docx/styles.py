@@ -54,11 +54,9 @@ def theme_styles(theme):
 def theme_ref(theme, dest):
     "Write a minimal, Word-openable reference docx at `dest` carrying only `theme`'s styles, for use as a later `reference` entry"
     from oxml import Document
-    from .wml import R, e
+    from .wml import e
     document = Document.new()
     document.main.replace(e.document(e.body(e.p())).bytes())
-    document.package.add_part('/word/styles.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml',
-        e.styles(*theme_styles(theme)).bytes())
-    document.package.add_relationship(document.package.main_part, f'{R}/styles', 'styles.xml')
+    document.part('StyleDefinitionsPart', create=True).replace(e.styles(*theme_styles(theme)).bytes())
     document.save(dest)
     return dest

@@ -6,16 +6,10 @@ inserted and each kept style applied once so Word writes out its definitions) su
 fonts, settings, and Word's own definitions for the styles we keep; this script strips styles.xml
 to exactly what STYLE_MAP needs, patches Quote for blockquote semantics (left indent, not Word's
 centering), authors the definitions Word leaves latent, scrubs personal metadata, and
-self-verifies: fast_checks == 'valid' and every STYLE_MAP name defined."""
-import zipfile
-from importlib.resources import files
-from lxml import etree
+self-verifies: document validation and every STYLE_MAP name defined."""
+from oxml import Document, Tree, e, w
 from mdhtml2docx.styles import STYLE_MAP, style_id
-from mdhtml2docx.validate import fast_checks, mce_strip, wml_schema
-
-W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
-
-def w(tag): return f'{{{W}}}{tag}'
+from mdhtml2docx.wml import W
 
 # Keep the seed's style definitions, correcting XML child order below; drop the rest.
 KEEP = {'Normal', 'DefaultParagraphFont', 'TableNormal', 'NoList', 'Quote', 'ListParagraph', 'Title',
@@ -23,7 +17,7 @@ KEEP = {'Normal', 'DefaultParagraphFont', 'TableNormal', 'NoList', 'Quote', 'Lis
 
 # Styles the seed cannot supply: our custom styles, plus built-ins the web UI cannot materialize.
 # Built-in names are canonical (lowercase for heading/caption/footnote families); custom ones marked so.
-NEW_STYLES = r'''<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+NEW_STYLES = f'''<w:styles xmlns:w="{W}">
 <w:style w:type="paragraph" w:styleId="BodyText">
   <w:name w:val="Body Text"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="1"/><w:qFormat/>
 </w:style>
@@ -94,69 +88,46 @@ NEW_STYLES = r'''<w:styles xmlns:w="http://schemas.openxmlformats.org/wordproces
 </w:styles>'''
 
 
-def build_styles(xml):
+def build_styles(tree):
     "Keep and schema-order the seed's styles, patch Quote, append the authored definitions."
-    root = etree.fromstring(xml)
-    schema = etree.parse(str(files('mdhtml2docx')/'schemas'/'wml.xsd'))
-    order = [w(e.get('name')) for e in schema.findall('.//{*}complexType[@name="CT_Style"]/{*}sequence/{*}element')]
-    for s in list(root.iter(w('style'))):
-        if s.get(w('styleId')) not in KEEP: root.remove(s)
-    q = next(s for s in root.iter(w('style')) if s.get(w('styleId')) == 'Quote')
-    qp = q.find(w('pPr'))
-    qp.remove(qp.find(w('jc')))
-    etree.SubElement(qp, w('ind')).set(w('left'), '720')
-    for s in root.iter(w('style')):
-        s[:] = sorted(s, key=lambda e: order.index(e.tag))
-        if s.get(w('styleId')) in ('Quote', 'Title', *[f'Heading{n}' for n in range(1, 7)]):
-            s.find(w('next')).set(w('val'), 'FirstParagraph')   # typing after these continues our prose chain
-    for s in etree.fromstring(NEW_STYLES.encode()): root.append(s)
-    return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+    for style in list(tree.elements(w.Style)):
+        if style.style_id not in KEEP: style.delete()
+    for style in tree.elements(w.Style):
+        style.reorder()
+        if style.style_id in ('Quote', 'Title', *[f'Heading{n}' for n in range(1, 7)]): style.child(w.NextParagraphStyle).val = 'FirstParagraph'
+    quote = next(s for s in tree.elements(w.Style) if s.style_id == 'Quote')
+    props = quote.child(w.StyleParagraphProperties)
+    props.child(w.Justification).delete()
+    props(e.ind(left=720))
+    for style in Tree(NEW_STYLES.encode()).root.children: tree.root(style)
 
-
-def doc_content(xml):
-    "word/document.xml: move the sectPr's header/footerReference first, as the schema requires (web Word appends them last)"
-    root = etree.fromstring(xml)
-    sect = root.find(f"{w('body')}/{w('sectPr')}")
-    refs = [e for e in sect if etree.QName(e).localname in ('headerReference', 'footerReference')]
-    for i, e in enumerate(refs):
-        sect.remove(e)
-        sect.insert(i, e)
-    return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
-
-def scrub_props(xml):
-    "Replace personal creator/lastModifiedBy in docProps/core.xml"
-    root = etree.fromstring(xml)
-    for tag in ('{http://purl.org/dc/elements/1.1/}creator',
-        '{http://schemas.openxmlformats.org/package/2006/metadata/core-properties}lastModifiedBy'):
-        e = root.find(tag)
-        if e is not None: e.text = 'mdhtml2docx'
-    return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
 def build(seed='_data/empty.docx', out='mdhtml2docx/templates/reference.docx'):
-    z = zipfile.ZipFile(seed)
-    with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zo:
-        for i in z.infolist():
-            data = z.read(i.filename)
-            if i.filename == 'word/styles.xml': data = build_styles(data)
-            elif i.filename == 'word/document.xml': data = doc_content(data)
-            elif i.filename == 'docProps/core.xml': data = scrub_props(data)
-            zo.writestr(i.filename, data)
+    doc = Document.open(seed)
+    build_styles(doc.part('StyleDefinitionsPart').xml)
+    sect, = doc.main.xml.elements(w.SectionProperties)
+    sect.reorder()  # web Word appends header/footerReference last
+    # Raw attributes: the typed `val` refuses Word for the web's 0/1 spellings, which CT_OnOffOnly does not allow.
+    for name in ('HeaderPart', 'FooterPart'):
+        for node in doc.part(name).xml.elements(w.BiDiVisual):
+            val = node.attribute(W, 'val')
+            if val in ('0', '1'): node.set_attribute(W, 'val', 'on' if val == '1' else 'off')
+    doc.properties.update(creator='mdhtml2docx', lastModifiedBy='mdhtml2docx')
+    doc.save(out)
     verify(out)
     print(f'{out}: ok')
 
 def verify(path):
-    "The template must pass fast_checks, define (not leave latent) every STYLE_MAP style, and keep the footer wired"
-    r = fast_checks(path)
-    assert r == 'valid', r
-    z = zipfile.ZipFile(path)
-    root = etree.fromstring(z.read('word/styles.xml'))
-    wml_schema().assertValid(mce_strip(root))
-    names = {s.find(w('name')).get(w('val')) for s in root.iter(w('style'))}
+    "Validate the template, its STYLE_MAP definitions and the linked footer."
+    doc = Document.open(path)
+    assert not (issues := doc.validate()['issues']), issues
+    styles = list(doc.styles)
+    names = {style.name for style in styles}
     missing = set(STYLE_MAP.values()) - names
     assert not missing, f'STYLE_MAP styles not defined: {missing}'
-    ids = {s.get(w('styleId')) for s in root.iter(w('style'))}
+    ids = {style.id for style in styles}
     badid = {n for n in STYLE_MAP.values() if style_id(n) not in ids}
     assert not badid, f'style_id mismatch for: {badid}'
-    assert z.read('word/document.xml').decode().count('footerReference') == 1, 'expected exactly one footerReference'
+    footer, = doc.main.xml.elements(w.FooterReference)
 
 if __name__ == '__main__': build()

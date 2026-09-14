@@ -3,12 +3,12 @@
 The reference template supplies styles/theme/fonts; oxml builds the generated XML and
 owns its package, parts, and relationships. Block and inline walkers mirror the MDHTML element
 inventory; STYLE_MAP names every style we emit."""
-import posixpath, re
+import re
 from pathlib import Path
 from fast5ever import Comment, Element, Node, Text
 from mdhtml import mdhtml2dom
 from mdhtml.export import REFTYPES, SCHEMES, decode_raw, tmpl_node, group_plan, ref_tokens, ref_variant, target_kind, Resolver, panel_parts
-from oxml import Document, Tree, w
+from oxml import Document, Tree, bookmark_name, emu, field, w
 from .styles import STYLE_MAP, style_id, theme_styles
 from .styles import ref_path as _refpath
 from .wml import *
@@ -22,13 +22,7 @@ _partxml = E('w', attr_ns='w', ns=NS)
 
 def _sid(key): return style_id(STYLE_MAP[key])
 
-def _related_part(package, kind, source=None):
-    source = source or package.main_part
-    rel = next((r for r in package.relationships(source) if r['type'] == f'{R}/{kind}'), None)
-    return package.relationship_part(source, rel['id']) if rel else None
-
-WPML = 'application/vnd.openxmlformats-officedocument.wordprocessingml'
-IMAGE_TYPES = dict(png='image/png', jpeg='image/jpeg', jpg='image/jpeg', gif='image/gif', tiff='image/tiff')
+PARTS = dict(styles='StyleDefinitionsPart', numbering='NumberingDefinitionsPart')
 
 BLOCK_TAGS = set(('address article aside blockquote details dialog div dl fieldset figure footer form h1 h2 h3 h4 h5 h6 '
     'header hgroup hr main menu nav ol p pre search section table ul').split())
@@ -54,19 +48,14 @@ class Converter:
         elif not isinstance(reference, (list, tuple)): reference = [reference]
         self.doc = Document.open(reference[0] or _refpath())
         self.package = self.doc.package
-        self.part_uris = {kind: _related_part(self.package, kind) for kind in ('styles', 'numbering', 'settings', 'footnotes')}
         self._source_uri = self.package.main_part
-        self._part_names = {p.lower() for p in self.package.part_names()}
         self.base = Path(base or '.')
         self.warnings = []
         self.bq = 0          # blockquote nesting depth
         self._bkid = 0       # bookmark id counter
-        self._imgn = 0       # image part counter (doubles as docPr id)
-        self._urlrids = {}   # (source part, hyperlink URL) -> rId
         self.nums = []       # (numId, abstractNumId, start) per list instance
         self.fndefs = {}     # endnote li elements by id, harvested before the walk
-        self.fnids = {}      # endnote id -> footnote w:id
-        self.fnotes = []     # (w:id, [footnote blocks])
+        self.fnids = {}      # endnote id -> Footnote
         self.stubs = {}      # undefined custom-style name -> (kind, styleId)
         self.first = True    # next body paragraph is a 'First Paragraph' (doc start; reset after FIRST_AFTER blocks)
         self._bknames = {}   # element id -> Word-legal bookmark name
@@ -74,19 +63,20 @@ class Converter:
         self.has_controls = False
         self.bound = []      # distinct bound-control names, in first-appearance order
         self.reftypes = REFTYPES | (reftypes or {})
-        self.sectpr = wchild(wchild(self.doc.main.xml.root, 'body'), 'sectPr')
-        pg, mar = wchild(self.sectpr, 'pgSz'), wchild(self.sectpr, 'pgMar')
+        self.sectpr = self.doc.main.xml.root.child(w.Body).child(w.SectionProperties)
+        pg, mar = self.sectpr.child(w.PageSize), self.sectpr.child(w.PageMargin)
         self.content_w = int(pg.attribute(W, 'w')) - int(mar.attribute(W, 'left')) - int(mar.attribute(W, 'right'))
-        if not self.part_uris['styles']: raise ValueError('reference doc lacks a styles relationship')
-        self.styles = self.package.part(self.part_uris['styles']).xml
-        numbering = self.package.part(uri).xml if (uri := self.part_uris['numbering']) else None
+        styles = self.doc.part('StyleDefinitionsPart')
+        if styles is None: raise ValueError('reference doc lacks a styles relationship')
+        self.styles = styles.xml
+        numbering = part.xml if (part := self.doc.part('NumberingDefinitionsPart')) else None
         used = [int(v) for e in ([] if numbering is None else numbering.root.children)
             for a in ('numId', 'abstractNumId') if (v := e.attribute(W, a)) is not None]
         self._numid = max(used, default=0)
         for ref in reference[1:]: self._merge_styles(ref)
         self._absbase = self._numid + 1
         self._numid += 3     # reserve bullet, ordered-list, and heading abstract IDs after all contributors
-        self.refstyles = {wchild(s, 'name').attribute(W, 'val').lower(): s.attribute(W, 'styleId') for s in self.styles.elements(w.Style)}
+        self.refstyles = {s.child(w.StyleName).val.lower(): s.style_id for s in self.styles.elements(w.Style)}
         if missing := [n for n in STYLE_MAP.values() if n.lower() not in self.refstyles]:
             raise ValueError(f'reference doc lacks dialect styles (map/template drift?): {missing}')
         self.hlstyles = {n.removeprefix('hl ').replace(' ', '.'): sid for n, sid in self.refstyles.items() if n.startswith('hl ')}
@@ -96,20 +86,19 @@ class Converter:
         self.scheme = list(number_headings.items()) if number_headings else None
         self.headnum = None
         heading = next((s for s in self.styles.elements(w.Style) if s.attribute(W, 'styleId') == 'Heading1'), None)
-        if number_headings and wchild(wchild(heading, 'pPr'), 'numPr') is None:
+        if number_headings and next(heading.elements(w.NumberingProperties), None) is None:
             self._numid += 1
             self.headnum = self._numid
 
     def _merge_styles(self, ref):
         "Merge a contributor's w:style elements, later-wins on style id or name"
         def keys(e):
-            nm = wchild(e, 'name')
+            nm = e.child(w.StyleName)
             return {(e.attribute(W, 'styleId') or '').lower(), '' if nm is None else nm.attribute(W, 'val').lower()} - {''}
         if str(ref).endswith('.docx'):
-            package = Document.open(ref).package
-            uri = _related_part(package, 'styles')
-            if uri is None: raise ValueError(f'style contributor lacks a styles relationship: {ref}')
-            new = list(package.part(uri).xml.elements(w.Style))
+            styles = Document.open(ref).part('StyleDefinitionsPart')
+            if styles is None: raise ValueError(f'style contributor lacks a styles relationship: {ref}')
+            new = list(styles.xml.elements(w.Style))
         elif str(ref).endswith('.xml'): new = self._xml_contrib(ref)
         else: new = list(Tree(e.styles(theme_styles(ref)).bytes()).elements(w.Style))
         existing = {key: s for s in self.styles.elements(w.Style) for key in keys(s)}
@@ -128,17 +117,15 @@ class Converter:
         for tag in ('abstractNum', 'num'):
             attr, mapping = f'{tag}Id', {}
             for e in tree.root.children:
-                if e.raw['qname'] != (W, tag): continue
+                if e.qname != (W, tag): continue
                 self._numid += 1
                 mapping[e.attribute(W, attr)] = str(self._numid)
                 e.set_attribute(W, attr, str(self._numid))
             for e in tree.elements():
-                if e.raw['qname'] == (W, attr) and (val := e.attribute(W, 'val')) in mapping: e.set_attribute(W, 'val', mapping[val])
+                if e.qname == (W, attr) and (val := e.attribute(W, 'val')) in mapping: e.set_attribute(W, 'val', mapping[val])
         for e in tree.root.children:
-            if e.raw['qname'] not in ((W, 'abstractNum'), (W, 'num')): continue
-            root = self._part('numbering').xml.root
-            before = {'num', 'numIdMacAtCleanup'} if e.raw['qname'] == (W, 'abstractNum') else {'numIdMacAtCleanup'}
-            e.copy_to(root, wpos(root, before))
+            if e.qname not in ((W, 'abstractNum'), (W, 'num')): continue
+            self._part('numbering').xml.root(e)
         return list(tree.elements(w.Style))
 
     def hlsid(self, scope):
@@ -148,24 +135,7 @@ class Converter:
             if sid := self.hlstyles.get('.'.join(parts)): return sid
             parts.pop()
 
-    def _add_part(self, uri, content_type, data):
-        "Add a new part without overwriting reference parts, including names differing only in case"
-        stem, ext = posixpath.splitext(uri)
-        n, candidate = 2, uri
-        while candidate.lower() in self._part_names: candidate, n = f'{stem}_{n}{ext}', n + 1
-        self.package.add_part(candidate, content_type, data)
-        self._part_names.add(candidate.lower())
-        return candidate
-
-    def _part(self, kind):
-        "A related Word part, creating an empty root and its relationship when absent."
-        if not (uri := self.part_uris[kind]):
-            uri = self._add_part(posixpath.join(posixpath.dirname(self.package.main_part), f'{kind}.xml'),
-                f'{WPML}.{kind}+xml', e(kind).bytes())
-            target = posixpath.relpath(uri, posixpath.dirname(self.package.main_part))
-            self.package.add_relationship(self.package.main_part, f'{R}/{kind}', target)
-            self.part_uris[kind] = uri
-        return self.package.part(uri)
+    def _part(self, kind): return self.doc.part(PARTS[kind], create=True)
 
     def warn(self, msg): self.warnings.append(msg)
 
@@ -192,7 +162,7 @@ class Converter:
     def field(self, instr, text, fmt):
         "A simple Word field with cached text; every field requests an update on open."
         self.has_fields = True
-        return e.fldSimple(e.r(self.rpr(fmt), e.t(text)), instr=f' {instr.strip()} ')
+        return field(instr, text, self.rpr(fmt))
 
     def link(self, el, fmt):
         "w:hyperlink for `a`: internal '#x' -> anchor, external -> relationship (deduped per URL); data-ref -> field"
@@ -205,19 +175,14 @@ class Converter:
         if href.startswith('#'): return [e.hyperlink(runs, anchor=self.bkname(href[1:]))]
         return self.external_link(href, runs)
 
-    def external_link(self, href, runs):
-        key = self._source_uri, href
-        if key not in self._urlrids:
-            self._urlrids[key] = self.package.add_relationship(self._source_uri, f'{R}/hyperlink', href, 'External')
-        return [e.hyperlink(runs, r__id=self._urlrids[key])]
+    def external_link(self, href, runs): return [self.doc.hyperlinks.link(href, runs, part_uri=self._source_uri)]
 
     REFSWITCH = dict(full=r'\w', rel=r'\r', leaf=r'\n', text='', page=None)
 
     def bkname(self, id):
         "Word-legal bookmark name for `id` (letter first, word chars only), stable within the document"
         if id not in self._bknames:
-            nm = re.sub(r'\W', '_', id)
-            if not nm[:1].isalpha(): nm = 'B' + nm
+            nm = bookmark_name(id)
             while nm in self._bknames.values(): nm += '_'
             self._bknames[id] = nm
         return self._bknames[id]
@@ -290,24 +255,15 @@ class Converter:
         if key not in self.fndefs:
             self.warn(f'footnote reference #{key} has no definition; dropped')
             return []
-        if key not in self.fnids:
-            self.fnids[key] = len(self.fnids) + 1
-            self.fnotes.append((self.fnids[key], self.fn_blocks(self.fndefs[key])))
-        return [e.r(e.rPr(e.rStyle(val=_sid('footnoteref'))), e.footnoteReference(id=self.fnids[key]))]
+        if key not in self.fnids: self.fnids[key] = self.doc.footnotes.create(self.fn_blocks(self.fndefs[key]))
+        return [self.fnids[key].reference()]
 
     def fn_blocks(self, li):
-        "Footnote body with its reference mark, in footnote-text style, backref stripped."
+        "Footnote body blocks, built with the footnotes part as their relationship scope; oxml adds the reference mark"
         save = self._source_uri, self.first
-        self._source_uri = self._part('footnotes').uri
-        try: blks = self.blocks(li, 'footnotetext')
+        self._source_uri = self.doc.part('FootnotesPart', create=True).uri
+        try: return self.blocks(li, 'footnotetext')
         finally: self._source_uri, self.first = save
-        if not blks or blks[0].raw['qname'] != (W, 'p'): blks.insert(0, self.para([], 'footnotetext'))
-        p = blks[0]
-        ppr = wchild(p, 'pPr')
-        pos = p.raw['children'].index(ppr.node_id) + 1 if ppr is not None else 0
-        p(e.r(e.rPr(e.rStyle(val=_sid('footnoteref'))), e.footnoteRef()), index=pos)
-        p(e.r(e.t(' ', xml__space='preserve')), index=pos + 1)
-        return blks
 
     def image(self, el, fmt, alt=None):
         "Embed a local image (dimensions sniffed, width/height px attrs override); remote srcs degrade to a link"
@@ -320,20 +276,14 @@ class Converter:
         except OSError:
             self.warn(f'image not found: {src}; alt text emitted')
             return self.text_runs(alt, fmt)
-        pw, ph, dx, dy = imgsize(data) or (300, 200, 96, 96)
-        cx, cy = round(pw * 914400 / dx), round(ph * 914400 / dy)
         w_, h_ = el.attrs.get('width'), el.attrs.get('height')
-        if w_: cx = round(float(w_) * EMU_PER_PX)
-        if h_: cy = round(float(h_) * EMU_PER_PX)
-        if w_ and not h_: cy = round(cx * ph / pw)
-        if h_ and not w_: cx = round(cy * pw / ph)
-        self._imgn += 1
-        ext = Path(src).suffix.lower() or '.bin'
-        name = posixpath.join(posixpath.dirname(self.package.main_part), f'media/image{self._imgn}{ext}')
-        uri = self._add_part(name, IMAGE_TYPES.get(ext[1:], 'application/octet-stream'), data)
-        target = posixpath.relpath(uri, posixpath.dirname(self._source_uri))
-        rid = self.package.add_relationship(self._source_uri, f'{R}/image', target)
-        return [e.r(drawing(rid, self._imgn, cx, cy, alt))]
+        try:
+            drawing = self.package.part(self._source_uri).add_image(data, width=emu(px=float(w_)) if w_ else None,
+                height=emu(px=float(h_)) if h_ else None, description=alt)
+        except ValueError as ex:
+            self.warn(f'{src}: {ex}; alt text emitted')
+            return self.text_runs(alt, fmt)
+        return [e.r(drawing)]
 
     INLINE_FMT = {'em': {'i': True}, 'strong': {'b': True}, 'code': {'rstyle': _sid('codeinline')},
         'del': {'strike': True}, 'mark': {'mark': True}, 'u': {'u': True}, 'sub': {'vert': 'subscript'}}
@@ -485,7 +435,7 @@ class Converter:
         "Cell content ending in a paragraph; header cells bold, align honored for inline cells."
         if any(c.name in BLOCK_TAGS for c in cell.element_children):
             blocks = self.blocks(cell)
-            if not blocks or blocks[-1].raw['qname'] != (W, 'p'): blocks.append(Tree(e.p().bytes()).root)
+            if not blocks or blocks[-1].qname != (W, 'p'): blocks.append(Tree(e.p().bytes()).root)
             return blocks
         jc = [e.jc(val=cell.attrs.get('align'))] if cell.attrs.get('align') in ('center', 'right') else None
         return [self.para(self.runs(cell, {'b': True} if header else {}), 'compact', jc)]
@@ -528,7 +478,7 @@ class Converter:
         gw = dxa or [self.content_w // ncols] * ncols   # pandoc's docx reader drops tables whose gridCols lack w:w
         grid = e.tblGrid(e.gridCol(w=gw[i]) for i in range(ncols))
         def _trpr(header=False):
-            return e.trPr(e.cantSplit(val=int(el.attrs.get('keep-rows') != 'false')), e.tblHeader() if header else None)
+            return e.trPr(e.cantSplit(val='off' if el.attrs.get('keep-rows') == 'false' else 'on'), e.tblHeader() if header else None)
         def _marker_tr(mel):
             "A range marker between rows: one full-width literal cell, so forms keep their markers visible"
             tcpr = e.tcPr(_tcw(0, ncols), e.gridSpan(val=ncols) if ncols > 1 else None)
@@ -602,8 +552,7 @@ class Converter:
         if tag == 'pre': return self.codeblock(el)
         if tag in ('ul', 'ol'): return self.list_el(el)
         if tag == 'table': return self.table(el)
-        if tag == 'hr':
-            return [Tree(e.p(e.pPr(e.pBdr(e.bottom(val='single', sz=6, space=1, color='auto')))).bytes()).root]
+        if tag == 'hr': return [Tree(e.p(e.pPr(e.pBdr(e.bottom(val='single', sz=6, space=1, color='auto')))).bytes()).root]
         if tag == 'dl': return self.dl(el)
         if tag == 'script': return self.rawxml(el)
         if tag == 'figure': return self.figure(el)
@@ -741,12 +690,6 @@ class Converter:
         fields = E('ns0', ns={'ns0': self.BIND_NS})
         return fields.fields(fields(name) for name in self.bound).bytes()
 
-    def footnotes_xml(self):
-        "word/footnotes.xml: the two Word-required separator notes plus our harvested ones"
-        notes = [e.footnote(e.p(e.pPr(e.spacing(after=0)), e.r(e(typ))), type=typ, id=wid)
-            for typ, wid in (('separator', -1), ('continuationSeparator', 0))]
-        return _partxml.footnotes(notes, (e.footnote(blks, id=wid) for wid, blks in self.fnotes)).bytes()
-
     def _number_heading_styles(self):
         "Patch w:numPr into the Title and Heading1-5 styles, binding them to the generated heading numbering; the Title's level 0 is what restarts the count at every h1"
         for i, sid in enumerate(HEADING_STYLE_IDS):
@@ -754,7 +697,7 @@ class Converter:
             if st is None:
                 if i == 0: self.warn('no Title style in the reference: an h1 will not restart the heading numbering')
                 continue
-            ppr = wchild(st, 'pPr')
+            ppr = st.child(w.StyleParagraphProperties)
             if ppr is None: ppr = st(e.pPr())
             ppr(e.numPr(e.ilvl(val=i), e.numId(val=self.headnum)))
 
@@ -782,6 +725,7 @@ class Converter:
 
     def to_docx(self, mdhtml, dest):
         root = parse_frag(mdhtml)
+        for note in list(self.doc.footnotes): note.delete()  # the reference supplies styles, not notes
         nodes = self.harvest_footnotes(root.children)
         self.idtext, self.reftarget, self.res = {}, {}, Resolver(self.reftypes)
         for el in (el for node in nodes if isinstance(node, Element) for el in _walk(node)):
@@ -793,18 +737,11 @@ class Converter:
         blocks = self.block_nodes(nodes)
         self.package.replace_part(self.package.main_part, _partxml.document(e.body(blocks, self.sectpr)).bytes())
         if self.nums or self.headnum: self._update_numbering()
-        if self.fnotes: self._part('footnotes').replace(self.footnotes_xml())
         if self.bound: self.doc.set_custom_xml(self.BIND_ID, self.bind_item_xml(), schema_uri=self.BIND_NS)
         self._update_styles()
-        if self.has_fields: self._update_settings()
+        if self.has_fields: self.doc.settings['updateFields'] = True
         self.doc.save(dest)
         return self.warnings
-
-    def _update_settings(self):
-        "Set updateFields in the live settings part, so Word refreshes fields on open."
-        root = self._part('settings').xml.root
-        if (update := wchild(root, 'updateFields')) is not None: update.set_attribute(W, 'val', 'true')
-        else: root(e.updateFields(val='true'))
 
 def mustache_fields(node):
     "Template variables as live Word `MERGEFIELD`s (markers never reach `tmpl`: the converter shows them literally)"

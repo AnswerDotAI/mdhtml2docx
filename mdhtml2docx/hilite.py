@@ -1,7 +1,4 @@
-"""Optional syntax scopes for code blocks, via fastpylight (Jeremy's tree-sitter highlighter).
-When fastpylight is absent or the language unknown, callers fall back to plain runs, so the
-package does not require fastpylight. Colors live in the reference doc's Hl* character
-styles (see styles.theme_styles); this module only tokenizes."""
+"Optional syntax scopes for code blocks, via fastpylight When fastpylight is absent or the language unknown, callers fall back to plain runs, so the package does not require fastpylight. Colors live in the reference doc's Hl* character styles (see styles.theme_styles); this module only tokenizes."
 
 # theme_colors is probed too: a pre-theme_colors fastpylight is treated as absent, not half-working
 try: from fastpylight import tokenize, theme_colors  # chkstyle: ignore

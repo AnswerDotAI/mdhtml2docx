@@ -15,12 +15,11 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = ["mdhtml>=0.1.39", "fast5ever>=0.1.5", "oxml>=0.1.1"]
+dependencies = ["mdhtml>=0.1.39", "fast5ever>=0.1.5", "oxml>=0.1.4"]
 
 [project.optional-dependencies]
-validation = ["lxml"]
 dev = [
-  "mdhtml2docx[validation]",
+  "lxml",
   "pytest",
   "fastship",
   "build",
@@ -40,7 +39,7 @@ include-package-data = false
 include = ["mdhtml2docx"]
 
 [tool.setuptools.package-data]
-mdhtml2docx = ["schemas/*", "templates/*", "word.sdef"]
+mdhtml2docx = ["templates/*"]
 
 [tool.pytest.ini_options]
 markers = ["slow: needs live GUI apps or long runtimes; deselected by default",
