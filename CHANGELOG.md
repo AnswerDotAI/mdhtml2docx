@@ -1,5 +1,12 @@
 <!-- do not remove -->
 
+## 0.1.5
+
+### New Features
+
+- Delegate OOXML packaging, validation, images, fields, footnotes, and Word scripting to oxml and macscript ([#19](https://github.com/AnswerDotAI/mdhtml2docx/issues/19))
+
+
 ## 0.1.4
 
 ### New Features
