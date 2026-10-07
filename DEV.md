@@ -22,21 +22,15 @@ Body-level phrasing runs are grouped into implicit Word paragraphs according to 
 
 ## Tests
 
-The `dev` extra includes `validation` (lxml) and pytest. The suite also uses Pandoc, fastcore, Pillow, and fastpylight from the development environment. Install the workspace after dependency or package-name changes, then run:
+The `dev` extra includes lxml and pytest. The suite also uses Pandoc, fastcore, Pillow, and fastpylight from the development environment. Install the workspace after dependency or package-name changes, then run:
 
 ```bash
 pytest -q
 ```
 
-The default suite validates generated archives and reads them back through Pandoc. With the sibling `mdhtml` checkout available, include its full feature sample:
+The default suite exercises a rich publication, numbered agreements and captions, mutable HTML/raw recovery, reference composition and reuse, and template lifecycles. These stories need only installed dependencies, not the sibling `mdhtml` sample checkout. Each conversion checks archive CRCs, `oxml.Document.validate()` (including the ECMA/MS-DOCX XSD checks now owned by `oxml`), and referenced styles. Pandoc's independent docx reader checks recovered content. Direct XML checks retain numbering bindings and restarts, footnote structure, renamed reference parts, relationship scopes, media collisions, and untouched reference content. Keep schema validation and independent Pandoc round trips. Input MDHTML fixtures should use ordinary HTML serialization rather than XHTML spellings.
 
-```bash
-pytest -q -m 'not slow'
-```
-
-`tests/test_validate.py` checks the zip container, main-part XML, and its ECMA-376 schema independently of `oxml`, resolving the main part from the root relationship. Converter tests check numbering and footnote schemas, actual numbering bindings, renamed reference parts, relationship scopes, media collisions, and untouched reference content. The checkout sample also validates styles and settings. Keep these schema checks and Pandoc round trips: `oxml`'s partial validation does not replace their independent coverage. The committed reference document and schemas remain binary/XML assets; input MDHTML fixtures should use ordinary HTML serialization rather than XHTML spellings.
-
-The no-lxml test checks only the dependency boundary: a minimal conversion in a fresh interpreter with lxml imports blocked. Feature behavior belongs in the normal converter tests, not a second suite embedded in a subprocess. `tools/createref.py` remains a development-only lxml user and requires the validation extra; it is not part of conversion.
+The no-lxml test checks only the dependency boundary: a minimal conversion in a fresh interpreter with lxml imports blocked. Feature behavior belongs in the normal converter tests, not a second suite embedded in a subprocess. `tools/createref.py` remains a development-only lxml user and requires the dev extra; it is not part of conversion.
 
 Regenerate the bundled reference with `python tools/createref.py` using `_data/empty.docx` as the seed. The generator sorts the seed's style and section-property children into schema order with oxml's `reorder()` and validates the resulting styles as well as the main document. Authored and theme styles emit their properties in schema order directly; conversion does not repair reference styles.
 
