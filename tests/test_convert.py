@@ -3,7 +3,7 @@ from pathlib import Path
 from lxml import etree
 from oxml import Document, e, w, namespaces
 
-from mdhtml import mdhtml2dom, md2mdhtml
+from mdhtml import Document as MdDocument, md2mdhtml
 from mdhtml.mustache import MUSTACHE
 from mdhtml2docx.mdhtml2docx import mdhtml2docx, mustache_fields
 from mdhtml2docx.styles import ref_path, theme_ref
@@ -57,7 +57,7 @@ def test_rich_publication(tmp_path):
         '<ul class="task-list"><li><input type="checkbox" checked> done</li><li><input type="checkbox"> todo</li></ul>'
         '<table colwidths="10em 2fr 1fr"><thead><tr><th>Feature</th><th>Status</th><th>Notes</th></tr></thead>'
         '<tbody><tr><td>Tables</td><td>ready</td><td>ok</td></tr></tbody></table>'
-        '<table keep-rows="false"><tr><td rowspan="2">a</td><td colspan="2">bc</td></tr><tr><td>b</td><td>c</td></tr></table>'
+        '<table keep-rows="false"><tr><td rowspan="2">a</td></tr><tr><td colspan="2">bc</td></tr></table>'
         '<table custom-style="Borderless Table" keep-rows="true"><thead><tr><th></th><th></th></tr></thead>'
         '<tbody><tr><td>A:</td><td>one</td></tr><tr><td>B:</td><td>two</td></tr></tbody></table>'
         '<p>H<sub>2</sub>O, E=mc<sup>2</sup>, <del>gone</del>, <mark>hot</mark>, <u>under</u>.</p><hr>'
@@ -106,7 +106,7 @@ def test_rich_publication(tmp_path):
     assert len(list(blank.elements(w.TableRow))) == 2
     assert [s.val for s in tree.elements(w.TableStyle)] == ['TableGrid', 'TableGrid', 'BorderlessTable']
     assert [m.val for m in merged.elements(w.VerticalMerge)] == ['restart', None]
-    assert next(merged.elements(w.GridSpan)).val == 2
+    assert next(merged.elements(w.GridSpan)).val == 2 and len(list(merged.elements(w.GridColumn))) == 3
     for tbl, keep in ((table, 'on'), (merged, 'off'), (blank, 'on')):
         assert [flag.val for flag in tbl.elements(w.CantSplit)] == [keep] * len(list(tbl.elements(w.TableRow)))
     signature, = (p for p in tree.elements(w.Paragraph) if 'Signature follows.' in [t.text for t in p.elements(w.Text)])
@@ -121,28 +121,27 @@ def test_rich_publication(tmp_path):
     assert xmlpart(out).xpath('//m:oMath/m:r/m:t/text()', namespaces=NS) == ['e^{i\\pi} + 1 = 0', 'E = mc^2']
 
 
-def test_mutable_html_and_raw_recovery(tmp_path):
-    "HTML5 repair and mutable input coexist with raw XML; malformed payloads warn without losing surrounding prose."
+def test_html_import_and_raw_recovery(tmp_path):
+    "Shared HTML import preserves semantic content; malformed raw XML warns without losing surrounding prose."
     out = tmp_path/'repaired.docx'
     b64 = base64.b64encode(b'<w:r><w:t>B64</w:t></w:r>').decode()
-    dom = mdhtml2dom('<p>Before <div>middle</div> after.</p><span zoop:33="x">tail</span><!-- a -- comment -->'
+    source = MdDocument.from_mdhtml('<p custom-style="Centered">Before <div>middle</div> after.</p><span zoop:33="x">tail</span><!-- a -- comment -->'
         '<input type="date"><template><p>hidden</p></template><p><span custom-style="Fancy">styled bit</span></p>'
         '<script type="application/vnd.mdhtml.raw" data-format="docx"><w:p><w:r><w:br w:type="page"/></w:r></w:p></script>'
         '<p>a <script type="application/vnd.mdhtml.raw" data-format="docx" data-encoding="html">'
         '&lt;w:r&gt;&lt;w:t&gt;RAW&lt;/w:t&gt;&lt;/w:r&gt;</script> b</p>'
         f'<p><script type="application/vnd.mdhtml.raw" data-format="docx" data-encoding="base64">{b64}</script></p>'
         '<script type="application/vnd.mdhtml.raw" data-format="latex">\\newpage</script>')
-    dom.children[0].attrs['custom-style'] = 'Centered'
-    doc = convert(dom, out, warnings=("unhandled inline <input type='date'>; dropped",
+    doc = convert(source, out, warnings=("unhandled inline <input type='date'>; dropped",
         "custom style 'Fancy' not in reference doc; stub injected"))
-    assert [t.text for t in doc.main.xml.elements(w.Text)] == ['Before ', 'middle', ' after.', 'tail', 'styled bit', 'a ', 'RAW', ' b', 'B64']
+    assert [t.text for t in doc.main.xml.elements(w.Text)] == ['Before', 'middle', 'after.', 'tail', 'styled bit', 'a ', 'RAW', ' b', 'B64']
     assert next(doc.main.xml.elements(w.ParagraphStyleId)).val == 'Centered' and doc.styles['Fancy'].name == 'Fancy'
     assert [b.type for b in doc.main.xml.elements(w.Break)] == ['page']
     text = pandoc(out)
     assert 'RAW' in text and 'hidden' not in text
     warnings = mdhtml2docx('<p>Still here.</p><script type="application/vnd.mdhtml.raw" data-format="docx"><w:oops></script>'
         '<script type="application/vnd.mdhtml.raw" data-format="docx" data-encoding="base64">!!!</script>', out)
-    assert len(warnings) == 2 and 'malformed' in warnings[0] and 'malformed base64' in warnings[1]
+    assert len(warnings) == 2 and any('malformed docx raw payload' in w for w in warnings) and any('malformed base64' in w for w in warnings)
     assert checked(out).story.text == 'Still here.'
     assert not convert('<template><p>still hidden</p></template>', out).main.xml.count(w.Paragraph)
 
@@ -151,24 +150,34 @@ def test_mutable_html_and_raw_recovery(tmp_path):
 def test_numbered_agreement_and_caption_references(tmp_path, scheme, level2):
     "Heading, definition and caption targets remain distinct; invalid references never replace the last good document."
     out = tmp_path/'agreement.docx'
-    src = ('<h1 id="sec-intro">Intro</h1><h2 id="sec-pay">Payment terms</h2><h3>Confidential Information</h3>'
+    src = ('<p><a href="#fig-plot" data-ref="text"></a> and <a href="#tbl-r" data-ref="text"></a>.</p>'
+        '<p><span id="fig_plot_t">Neighbor</span></p>'
+        '<h1 id="sec-intro">Intro</h1><h2 id="sec-pay">Payment terms</h2><h3>Confidential Information</h3>'
         '<dl><dt id="def-term"><strong>"Term"</strong></dt><dt id="def-ap">Agreement Period</dt><dd>the deal period</dd></dl>'
         '<p>The <span id="def-eff">Effective Date</span> is set.</p>'
         f'<figure id="fig-plot"><img src="{IMAGE}"><figcaption>A plot</figcaption></figure>'
         '<table id="tbl-r"><caption>Results <em>now</em></caption><tr><td>1</td></tr></table>'
+        '<div class="math display" id="eq-force">F = ma</div><div class="math display">x = y</div>'
         '<p>See <a href="#sec-pay" data-ref=""></a>, <a href="#sec-intro" data-ref="bare text"></a>, '
         '<a href="#sec-pay" data-ref="">Clause</a>, <a href="#sec-pay" data-ref="bare page"></a> and '
         '<span data-refs=""><a href="#sec-intro" data-ref=""></a><a href="#sec-pay" data-ref=""></a></span>. '
         '<a href="#def-term" data-ref=""></a><a href="#def-eff" data-ref=""></a><a href="#def-ap" data-ref="page"></a>; '
         '<a href="#fig-plot" data-ref=""></a><a href="#tbl-r" data-ref="bare"></a> '
-        '<span data-refs=""><a href="#fig-plot" data-ref=""></a><a href="#tbl-r" data-ref=""></a></span>.</p>')
-    doc = convert(src, out, number_headings=scheme)
+        '<span data-refs=""><a href="#fig-plot" data-ref=""></a><a href="#tbl-r" data-ref=""></a></span>. '
+        '<a href="#eq-force" data-ref=""></a>, <a href="#eq-force" data-ref="bare"></a>, '
+        'and <a href="#eq-force" data-ref="page"></a>.</p>')
+    doc = convert(src, out, number_headings=scheme, reftypes=dict(fig=('Item', 'Items'), tbl=('Item', 'Items')))
     expected = {r'REF sec_pay \w \h', r'REF sec_intro \h', r'PAGEREF sec_pay \h', r'REF def_term \h', r'REF def_eff \h',
-        r'PAGEREF def_ap \h', r'SEQ Figure \* ARABIC', r'SEQ Table \* ARABIC', r'REF fig_plot \h', r'REF tbl_r_n \h'}
+        r'PAGEREF def_ap \h', r'SEQ Figure \* ARABIC', r'SEQ Table \* ARABIC', r'REF fig_plot_n \h', r'REF tbl_r_n \h',
+        r'SEQ Equation \* ARABIC', r'REF eq_force_n \h', r'PAGEREF eq_force \h', r'REF fig_plot_t \h', r'REF tbl_r_t \h'}
     assert set(fields(doc)) >= expected and r'REF fig_plot \w \h' not in fields(doc)
-    for fragment in ('Section ', 'Sections ', 'Clause ', 'Effective Date', 'A plot', 'Results '): assert fragment in doc.story.text
+    for fragment in ('Section ', 'Sections ', 'Clause ', 'Effective Date', 'A plot', 'Results ', 'Item ', 'Equation '): assert fragment in doc.story.text
     assert 'Figures' not in doc.story.text
-    assert {b.name for b in doc.main.xml.elements(w.BookmarkStart)} >= {'def_term', 'def_eff', 'fig_plot', 'tbl_r_n'}
+    assert {b.name for b in doc.main.xml.elements(w.BookmarkStart)} >= {'def_term', 'def_eff', 'fig_plot', 'tbl_r_n', 'eq_force', 'eq_force_n'}
+    assert fields(doc).count(r'SEQ Equation \* ARABIC') == 1 and not any(f.startswith('SEQ Item ') for f in fields(doc))
+    names = [b.name for b in doc.main.xml.elements(w.BookmarkStart)]
+    assert len(names) == len(set(names)) and {'fig_plot_t', 'fig_plot_t_', 'tbl_r_t'} <= set(names)
+    assert xmlpart(out).xpath('//w:bookmarkStart[@w:name="fig_plot_t"]/following-sibling::w:r[1]/w:t/text()', namespaces=NS) == ['A plot']
     assert next(doc.main.xml.elements(namespaces['wp'].DocProperties)).description == 'A plot'
     assert doc.part('DocumentSettingsPart').xml.count(w.UpdateFieldsOnOpen) == 1
     nids = []
@@ -185,9 +194,10 @@ def test_numbered_agreement_and_caption_references(tmp_path, scheme, level2):
     saved = out.read_bytes()
     for invalid, message in (
         ('<p><a href="#nope" data-ref=""></a></p>', '#nope'),
-        ('<p id="z-a"><a href="#z-a" data-ref=""></a></p>', "reference type 'z'"),
+        ('<h2 id="z-a">Unknown type</h2><p><a href="#z-a" data-ref=""></a></p>', "reference type 'z'"),
         ('<p><a href="#sec-pay" data-ref="page text"></a></p>', 'conflicting data-ref'),
-        ('<div id="d-x"><p>hi</p></div><p><a href="#d-x" data-ref=""></a></p>', '#d-x')):
+        ('<div id="d-x"><p>hi</p></div><p><a href="#d-x" data-ref=""></a></p>', '#d-x'),
+        ('<div class="math display" id="eq-a">x</div><p><a href="#eq-a" data-ref="text"></a></p>', 'equation source')):
         with pytest.raises(ValueError, match=message): mdhtml2docx(invalid, out)
         assert out.read_bytes() == saved
 
@@ -281,12 +291,12 @@ def test_template_lifecycle(tmp_path):
     doc = convert(src, out, tmpl=mustache_fields)
     assert fields(doc).count('MERGEFIELD sal') == 2 and 'MERGEFIELD name' in fields(doc)
     assert '«#opt»' in doc.story.text and '«/opt»' in doc.story.text
-    doc = convert(src, out, tmpl=lambda node: ('control', node['value']))
+    doc = convert(src, out, tmpl=lambda node: ('control', node['name']))
     assert doc.main.xml.count(w.SdtRun) == doc.main.xml.count(w.ShowingPlaceholder) == 3
     assert {t.val for t in doc.main.xml.elements(w.Tag)} == {'sal', 'name'}
     assert {s.val for s in doc.main.xml.elements(w.RunStyle)} == {'PlaceholderText'}
     assert next(doc.styles['PlaceholderText'].element.elements(w.Color)).val == '808080'
-    bound = lambda node: ('bound', node['value'])
+    bound = lambda node: ('bound', node['name'])
     doc = convert(src, out, tmpl=bound)
     assert [b.x_path for b in doc.main.xml.elements(w.DataBinding)].count('/ns0:fields[1]/ns0:sal[1]') == 2
     doc.set_custom_xml('{00000000-0000-0000-0000-000000000001}', b'<unrelated/>')

@@ -1,13 +1,7 @@
-"""Convert MDHTML fragments to docx.
-
-The reference template supplies styles/theme/fonts; oxml builds the generated XML and
-owns its package, parts, and relationships. Block and inline walkers mirror the MDHTML element
-inventory; STYLE_MAP names every style we emit."""
+"Write semantic mdhtml Documents as docx with live Word fields and styles."
 import re
 from pathlib import Path
-from fast5ever import Comment, Element, Node, Text
-from mdhtml import mdhtml2dom
-from mdhtml.export import REFTYPES, SCHEMES, decode_raw, tmpl_node, group_plan, ref_tokens, ref_variant, target_kind, Resolver, panel_parts
+from mdhtml.export import HeadingNums, import_mdhtml
 from oxml import Document, Tree, bookmark_name, emu, field, w
 from .styles import STYLE_MAP, style_id, theme_styles
 from .styles import ref_path as _refpath
@@ -24,22 +18,10 @@ def _sid(key): return style_id(STYLE_MAP[key])
 
 PARTS = dict(styles='StyleDefinitionsPart', numbering='NumberingDefinitionsPart')
 
-BLOCK_TAGS = set(('address article aside blockquote details dialog div dl fieldset figure footer form h1 h2 h3 h4 h5 h6 '
-    'header hgroup hr main menu nav ol p pre search section table ul').split())
-INERT_TAGS = {'base', 'link', 'meta', 'style', 'template', 'title'}
 HEADING_STYLE_IDS = ['Title'] + [f'Heading{i}' for i in range(1, 6)]   # h1-h6, one per numbering level: the Title carries level 0
 
-def _walk(el):
-    yield el
-    for child in el.element_children: yield from _walk(child)
-def _classes(el): return (el.attrs.get('class') or '').split()
-def _is_raw(el): return el.name == 'script' and el.attrs.get('type') == 'application/vnd.mdhtml.raw'
+def _classes(node): return node['attrs'].get('class', '').split()
 
-def parse_frag(src):
-    "Parse an MDHTML body fragment, or return an existing mutable fragment"
-    if isinstance(src, Node): return src
-    if not isinstance(src, str): raise TypeError('input must be an MDHTML string or fast5ever node')
-    return mdhtml2dom(src)
 
 class Converter:
     def __init__(self, reference=None, base=None, reftypes=None, number_headings=None, tmpl=None):
@@ -54,15 +36,16 @@ class Converter:
         self.bq = 0          # blockquote nesting depth
         self._bkid = 0       # bookmark id counter
         self.nums = []       # (numId, abstractNumId, start) per list instance
-        self.fndefs = {}     # endnote li elements by id, harvested before the walk
+        self.fndefs = {}     # footnote label -> semantic blocks
         self.fnids = {}      # endnote id -> Footnote
         self.stubs = {}      # undefined custom-style name -> (kind, styleId)
         self.first = True    # next body paragraph is a 'First Paragraph' (doc start; reset after FIRST_AFTER blocks)
-        self._bknames = {}   # element id -> Word-legal bookmark name
+        self._bknames = {}   # (target id, part) -> Word-legal bookmark name
         self.has_fields = False
         self.has_controls = False
         self.bound = []      # distinct bound-control names, in first-appearance order
-        self.reftypes = REFTYPES | (reftypes or {})
+        self.reftypes, self.number_headings = reftypes, number_headings
+        self.figure_alt = None
         self.sectpr = self.doc.main.xml.root.child(w.Body).child(w.SectionProperties)
         pg, mar = self.sectpr.child(w.PageSize), self.sectpr.child(w.PageMargin)
         self.content_w = int(pg.attribute(W, 'w')) - int(mar.attribute(W, 'left')) - int(mar.attribute(W, 'right'))
@@ -80,15 +63,7 @@ class Converter:
         if missing := [n for n in STYLE_MAP.values() if n.lower() not in self.refstyles]:
             raise ValueError(f'reference doc lacks dialect styles (map/template drift?): {missing}')
         self.hlstyles = {n.removeprefix('hl ').replace(' ', '.'): sid for n, sid in self.refstyles.items() if n.startswith('hl ')}
-        if isinstance(number_headings, str):
-            if number_headings not in SCHEMES: raise ValueError(f'unknown numbering scheme {number_headings!r}')
-            number_headings = SCHEMES[number_headings]
-        self.scheme = list(number_headings.items()) if number_headings else None
-        self.headnum = None
-        heading = next((s for s in self.styles.elements(w.Style) if s.attribute(W, 'styleId') == 'Heading1'), None)
-        if number_headings and next(heading.elements(w.NumberingProperties), None) is None:
-            self._numid += 1
-            self.headnum = self._numid
+        self.scheme = self.headnum = None
 
     def _merge_styles(self, ref):
         "Merge a contributor's w:style elements, later-wins on style id or name"
@@ -164,70 +139,52 @@ class Converter:
         self.has_fields = True
         return field(instr, text, self.rpr(fmt))
 
-    def link(self, el, fmt):
-        "w:hyperlink for `a`: internal '#x' -> anchor, external -> relationship (deduped per URL); data-ref -> field"
-        if el.attrs.get('data-ref') is not None:
-            fld = self.ref_fld(el, fmt)
-            return self.ref_prefix(el, fmt) + fld
-        href = el.attrs.get('href')
-        if not href: return self.runs(el, fmt)
-        runs = self.runs(el, fmt | {'rstyle': _sid('hyperlink')})
+    def link(self, node, fmt):
+        runs = self.runs(node['children'], fmt | {'rstyle': _sid('hyperlink')})
+        href = node['url']
         if href.startswith('#'): return [e.hyperlink(runs, anchor=self.bkname(href[1:]))]
         return self.external_link(href, runs)
+
 
     def external_link(self, href, runs): return [self.doc.hyperlinks.link(href, runs, part_uri=self._source_uri)]
 
     REFSWITCH = dict(full=r'\w', rel=r'\r', leaf=r'\n', text='', page=None)
 
-    def bkname(self, id):
-        "Word-legal bookmark name for `id` (letter first, word chars only), stable within the document"
-        if id not in self._bknames:
-            nm = bookmark_name(id)
+    def bkname(self, id, part=''):
+        "Reserve a target or generated part name, including before its definition."
+        key = id, part
+        if key not in self._bknames:
+            nm = bookmark_name(id) if not part else self.bkname(id) + dict(number='_n', text='_t')[part]
             while nm in self._bknames.values(): nm += '_'
-            self._bknames[id] = nm
-        return self._bknames[id]
+            self._bknames[key] = nm
+        return self._bknames[key]
 
-    def ref_prefix(self, el, fmt, plural=False):
-        "Literal runs before a reference field: the shared `Resolver.prefix` (override text, the type word, or nothing for bare, caption, and text refs)"
-        tgt = (el.attrs.get('href') or '#')[1:]
-        pre = self.res.prefix(el.to_text().strip(), tgt, ref_tokens(el.attrs.get('data-ref')), plural)
-        return self.text_runs(pre, fmt) if pre else []
+    def references(self, items, fmt):
+        out = []
+        for part in self.index.plan(items):
+            out += self.text_runs(part['separator'] + part['prefix'], fmt)
+            out += self.ref_fld(part, fmt)
+        return out
 
-    def ref_fld(self, el, fmt):
-        """REF/PAGEREF field for a cross-reference `a`, with a cached placeholder Word replaces on update.
-        Heading/paragraph targets number via `\\w`; caption targets return their bookmarked 'Label N' text
-        (or the number-only `_n` bookmark for bare/leaf/rel refs), and text targets (spans, definition
-        terms) their bookmark text, so `\\w` never applies to either."""
-        tgt = (el.attrs.get('href') or '#')[1:]
-        tokens = ref_tokens(el.attrs.get('data-ref'))
-        self.res.check(tgt)
-        variant = ref_variant(tokens)
-        nm = self.bkname(tgt)
-        if variant == 'page': instr, cached = rf'PAGEREF {nm} \h', '#'
-        elif self.reftarget[tgt] == 'caption':
-            bare = 'bare' in tokens or variant in ('leaf', 'rel')
-            instr, cached = (rf'REF {nm}_n \h' if bare else rf'REF {nm} \h'), '#'
-        elif self.reftarget[tgt] == 'text': instr, cached = rf'REF {nm} \h', self.res.core(tgt, tokens)
+    def ref_fld(self, part, fmt):
+        "Map a shared reference plan to a live Word REF or PAGEREF field."
+        target, variant = part['target'], part['variant']
+        name, kind = self.bkname(target), part['kind']
+        if kind == 'equation' and variant == 'text': raise ValueError('DOCX does not support ref=text to equation source')
+        if variant == 'page': instr, cached = rf'PAGEREF {name} \h', '#'
+        elif variant == 'text' and kind in ('figure', 'table'): instr, cached = rf'REF {self.bkname(target, "text")} \h', part['text']
+        elif kind in ('figure', 'table', 'equation'): instr, cached = rf'REF {self.bkname(target, "number")} \h', '#'
+        elif kind == 'text': instr, cached = rf'REF {name} \h', part['text']
         else:
-            sw = self.REFSWITCH[variant]
-            instr = rf'REF {nm} {sw} \h' if sw else rf'REF {nm} \h'
-            cached = self.idtext.get(tgt, '#') if variant == 'text' else '#'
+            switch = self.REFSWITCH[variant]
+            instr = rf'REF {name} {switch} \h' if switch else rf'REF {name} \h'
+            cached = part['text'] if variant == 'text' else '#'
         return [self.field(instr, cached, fmt)]
 
-    def ref_group(self, el, fmt):
-        "data-refs span: one pluralized prefix for a same-type group, per-item singular prefixes for mixed types; never range-collapsed"
-        refs = [c for c in el.element_children if c.name == 'a']
-        types = [(a.attrs.get('href') or '#')[1:].split('-')[0] for a in refs]
-        out = []
-        for (sep, pre, plural), a in zip(group_plan(types), refs):
-            if sep: out += self.text_runs(sep, fmt)
-            if pre: out += self.ref_prefix(a, fmt, plural=plural)
-            out += self.ref_fld(a, fmt)
-        return out
 
     def custom_style(self, el, kind):
         "Style id for an explicit custom-style attr (stubbed + warned if undefined), else a class matching a reference style name"
-        if cs := el.attrs.get('custom-style'):
+        if cs := el['attrs'].get('custom-style'):
             if cs.lower() in self.refstyles: return self.refstyles[cs.lower()]
             if cs not in self.stubs:
                 self.stubs[cs] = (kind, re.sub(r'\W', '', cs) or f'Custom{len(self.stubs)}')
@@ -235,40 +192,26 @@ class Converter:
             return self.stubs[cs][1]
         return next((self.refstyles[c.lower()] for c in _classes(el) if c.lower() in self.refstyles), None)
 
-    def span(self, el, fmt):
-        "Inline span: math -> inline m:oMath zone (linear source, dialect-agnostic), custom style -> rStyle, else transparent; an id bookmarks the runs"
-        if el.attrs.get('data-refs') is not None: return self.ref_group(el, fmt)
-        if el.has_class('math'): return self.bookmark(el, [self.omath(el)])
-        if sid := self.custom_style(el, 'character'): return self.bookmark(el, self.runs(el, fmt | {'rstyle': sid}))
-        return self.bookmark(el, self.runs(el, fmt))
+    def omath(self, tex): return m.oMath(m.r(m.t(tex, xml__space='preserve')))
 
-    def omath(self, el):
-        "An m:oMath zone holding `el`'s text as linear-format math runs"
-        return m.oMath(m.r(m.t(el.to_text(), xml__space='preserve')))
-
-    def fnref(self, el, fmt):
-        "Footnote-reference run for a sup>a.footnote-ref, or None when `el` is an ordinary sup"
-        children = el.element_children
-        a = children[0] if len(children) == 1 and children[0].name == 'a' else None
-        if a is None or not a.has_class('footnote-ref'): return None
-        key = (a.attrs.get('href') or '#')[1:]
+    def fnref(self, key):
         if key not in self.fndefs:
             self.warn(f'footnote reference #{key} has no definition; dropped')
             return []
         if key not in self.fnids: self.fnids[key] = self.doc.footnotes.create(self.fn_blocks(self.fndefs[key]))
         return [self.fnids[key].reference()]
 
-    def fn_blocks(self, li):
-        "Footnote body blocks, built with the footnotes part as their relationship scope; oxml adds the reference mark"
-        save = self._source_uri, self.first
+    def fn_blocks(self, blocks):
+        saved = self._source_uri, self.first
         self._source_uri = self.doc.part('FootnotesPart', create=True).uri
-        try: return self.blocks(li, 'footnotetext')
-        finally: self._source_uri, self.first = save
+        try: return self.block_nodes(blocks, 'footnotetext')
+        finally: self._source_uri, self.first = saved
+
 
     def image(self, el, fmt, alt=None):
         "Embed a local image (dimensions sniffed, width/height px attrs override); remote srcs degrade to a link"
-        src = el.attrs.get('src') or ''
-        if alt is None: alt = el.attrs.get('alt') or src
+        src = el['url']
+        if alt is None: alt = el['alt'] or self.figure_alt or src
         if re.match(r'[a-z][a-z0-9+.-]*://', src):
             self.warn(f'remote image not embedded: {src}')
             return self.external_link(src, self.text_runs(alt, fmt | {'rstyle': _sid('hyperlink')}))
@@ -276,7 +219,7 @@ class Converter:
         except OSError:
             self.warn(f'image not found: {src}; alt text emitted')
             return self.text_runs(alt, fmt)
-        w_, h_ = el.attrs.get('width'), el.attrs.get('height')
+        w_, h_ = el['attrs'].get('width'), el['attrs'].get('height')
         try:
             drawing = self.package.part(self._source_uri).add_image(data, width=emu(px=float(w_)) if w_ else None,
                 height=emu(px=float(h_)) if h_ else None, description=alt)
@@ -285,47 +228,38 @@ class Converter:
             return self.text_runs(alt, fmt)
         return [e.r(drawing)]
 
-    INLINE_FMT = {'em': {'i': True}, 'strong': {'b': True}, 'code': {'rstyle': _sid('codeinline')},
-        'del': {'strike': True}, 'mark': {'mark': True}, 'u': {'u': True}, 'sub': {'vert': 'subscript'}}
+    INLINE_FMT = dict(emph={'i': True}, strong={'b': True}, strike={'strike': True}, highlight={'mark': True},
+        superscript={'vert': 'superscript'}, subscript={'vert': 'subscript'}, u={'u': True})
 
-    def inline(self, el, fmt):
-        "Run-level elements for inline `el` under formatting context `fmt` (dict; copied on change)"
-        tag = el.name
-        if tag in self.INLINE_FMT: out = self.runs(el, fmt | self.INLINE_FMT[tag])
-        elif tag == 'a': out = self.link(el, fmt)
-        elif tag == 'sup':
-            fn = self.fnref(el, fmt)
-            out = fn if fn is not None else self.runs(el, fmt | {'vert': 'superscript'})
-        elif tag == 'span': out = self.span(el, fmt)
-        elif tag == 'img': out = self.image(el, fmt)
-        elif tag == 'br': out = [e.r(self.rpr(fmt), e.br(type='page' if el.attrs.get('type') == 'page' else None))]
-        elif tag == 'input':   # task-list checkbox
-            if el.attrs.get('type') != 'checkbox':
-                self.warn(f'unhandled inline <input type={el.attrs.get("type")!r}>; dropped')
+    def inline(self, node, fmt):
+        kind = node['type']
+        if kind == 'text': return self.text_runs(node['text'], fmt)
+        if kind == 'soft_break': return self.text_runs(' ', fmt)
+        if kind == 'hard_break': return [e.r(self.rpr(fmt), e.br())]
+        tag = node.get('tag') if kind == 'element_inline' else kind
+        if tag in self.INLINE_FMT: out = self.runs(node['children'], fmt | self.INLINE_FMT[tag])
+        elif kind == 'code': out = self.text_runs(node['text'], fmt | {'rstyle': _sid('codeinline')})
+        elif kind == 'link': out = self.link(node, fmt)
+        elif kind == 'reference': out = self.references(node['items'], fmt)
+        elif kind == 'footnote_ref': out = self.fnref(node['label'])
+        elif kind == 'span':
+            sid = self.custom_style(node, 'character')
+            out = self.runs(node['children'], fmt | {'rstyle': sid} if sid else fmt)
+        elif kind == 'math_inline': out = [self.omath(node['tex'])]
+        elif kind == 'image': out = self.image(node, fmt)
+        elif tag == 'br': out = [e.r(self.rpr(fmt), e.br(type='page' if node['attrs'].get('type') == 'page' else None))]
+        elif tag == 'input':
+            if node['attrs'].get('type') != 'checkbox':
+                self.warn(f'unhandled inline <input type={node["attrs"].get("type")!r}>; dropped')
                 return []
-            g = '☒' if el.attrs.get('checked') is not None else '☐'
-            out = [e.r(self.rpr(fmt), e.t(g + ' ', xml__space='preserve'))]
-        elif tag == 'script': out = self.rawxml(el)
-        elif tag == 'template': out = self.tmpl_runs(el, fmt, 'inline')
-        elif tag in INERT_TAGS: out = []
-        else:  # unknown inline (abbr etc): recurse transparently
-            out = self.runs(el, fmt)
-        return out
+            out = self.text_runs('☒ ' if 'checked' in node['attrs'] else '☐ ', fmt)
+        elif kind == 'raw_inline': out = self.rawxml(node)
+        elif kind == 'operation': out = self.tmpl_runs(node, fmt)
+        else: out = self.runs(node.get('children', []), fmt)
+        return self.bookmark(node, out)
 
-    def runs(self, el, fmt):
-        "Run-level elements for an element's ordered text and element children"
-        return self.group_runs(el.children, fmt)
+    def runs(self, nodes, fmt): return [run for node in nodes for run in self.inline(node, fmt)]
 
-    def group_runs(self, nodes, fmt):
-        "Runs for a mixed list of text and inline nodes"
-        return [r for node in nodes for r in self.inline_node(node, fmt)]
-
-    def inline_node(self, node, fmt):
-        if isinstance(node, Text): return self.text_runs(node.text, fmt)
-        if isinstance(node, Element):
-            if node.name == 'a' and node.has_class('footnote-backref'): return []
-            return self.inline(node, fmt)
-        return []
 
     # ---- block level --------------------------------------------------------
     def para(self, runs, style='body', extra=None, sid=None):
@@ -340,64 +274,51 @@ class Converter:
         self.first = False
         return self.para(runs, use, extra, sid)
 
-    def bookmark(self, el, runs):
+    def bookmark(self, el, runs, part=''):
         "Wrap `runs` in a bookmark when `el` carries an id (target for internal links)"
-        if not (i := el.attrs.get('id')): return runs
+        if not (i := el['attrs'].get('id')): return runs
         self._bkid += 1
-        return [e.bookmarkStart(id=self._bkid, name=self.bkname(i)), *runs, e.bookmarkEnd(id=self._bkid)]
+        return [e.bookmarkStart(id=self._bkid, name=self.bkname(i, part)), *runs, e.bookmarkEnd(id=self._bkid)]
 
-    def codeblock(self, el):
-        "Source Code paragraph, lines joined with w:br; Hl* character styles when a language class names one"
-        children = el.element_children
-        code = children[0] if children and children[0].name == 'code' else el
-        lang = next((c.removeprefix('language-') for c in _classes(code) if c.startswith('language-')), None)
-        text = code.to_text().rstrip('\n')
+    def codeblock(self, node):
+        "Source Code paragraphs with optional syntax-colored runs."
+        text, lang = node['text'].rstrip('\n'), node['lang']
         segs = (segments(text, lang) if self.hlstyles else None) or [(text, None)]
         runs = []
-        for txt, scope in segs:
-            for j, part in enumerate(txt.split('\n')):
-                if j: runs.append(e.r(e.br()))
-                if not part: continue
-                sid = self.hlsid(scope)
-                runs.append(e.r(e.rPr(e.rStyle(val=sid)) if sid else None, e.t(part, xml__space='preserve')))
+        for text, scope in segs:
+            for i, part in enumerate(text.split('\n')):
+                if i: runs.append(e.r(e.br()))
+                if part:
+                    sid = self.hlsid(scope)
+                    runs.append(e.r(e.rPr(e.rStyle(val=sid)) if sid else None, e.t(part, xml__space='preserve')))
         return [self.para(runs, 'codeblock')]
 
+
     # ---- lists --------------------------------------------------------------
-    def list_el(self, el, ilvl=0):
-        "A ul/ol: fresh num instance (so each ordered list restarts), items at level `ilvl`"
+    def list_el(self, node, ilvl=0):
+        "Allocate a live Word list instance; ordered lists retain their start."
         self._numid += 1
         nid = self._numid
-        self.nums.append((nid, 0 if el.name == 'ul' else 1, int(el.attrs.get('start', 1))))
-        return [b for li in el.element_children if li.name == 'li' for b in self.li(li, nid, min(ilvl, 8))]
+        self.nums.append((nid, 1 if node['ordered'] else 0, node['start']))
+        return [block for item in node['items'] for block in self.li(item, nid, min(ilvl, 8))]
 
-    def li_parts(self, el):
-        "Split mixed li content into ('inline', [nodes]) groups and ('block', child) items, in order"
-        parts = []
-        def add(x):
-            if isinstance(x, Text) and not x.text.strip() and '\n' in x.text: return
-            if parts and parts[-1][0] == 'inline': parts[-1][1].append(x)
-            else: parts.append(('inline', [x]))
-        for node in el.children:
-            if isinstance(node, Element) and node.name in BLOCK_TAGS: parts.append(('block', node))
-            elif isinstance(node, (Text, Element)): add(node)
-        return parts
-
-    def li(self, li, nid, ilvl):
-        "Blocks for one list item: the first paragraph carries the number, the rest continue indented"
-        numpr = [e.numPr(e.ilvl(val=ilvl), e.numId(val=nid))]
-        cont = [e.ind(left=720 * (ilvl + 1))]
+    def li(self, item, nid, ilvl):
+        numpr, cont = [e.numPr(e.ilvl(val=ilvl), e.numId(val=nid))], [e.ind(left=720 * (ilvl + 1))]
         out = []
-        for kind, val in self.li_parts(li):
-            if kind == 'inline': out.append(self.para(self.group_runs(val, {}), 'list', numpr if not out else cont))
-            elif val.name in ('ul', 'ol'): out += self.list_el(val, ilvl + 1)
-            elif val.name == 'p': out.append(self.para(self.runs(val, {}), 'list', numpr if not out else cont))
-            else: out += self.block(val, 'list')
+        for node in item['blocks']:
+            if node['type'] == 'list': out += self.list_el(node, ilvl + 1)
+            elif node['type'] == 'paragraph':
+                runs = self.runs(node['children'], {})
+                if not out and item['checked'] is not None: runs = self.text_runs('☒ ' if item['checked'] else '☐ ', {}) + runs
+                out.append(self.para(runs, 'list', numpr if not out else cont))
+            else: out += self.block(node, 'list')
         return out or [self.para([], 'list', numpr)]
+
 
     # ---- tables -------------------------------------------------------------
     def table_grid(self, rows):
         "Resolve row/colspans into per-row cell placements: ('cell', ci, el, cs, rs) / ('cont', ci, width)"
-        spans, placed, ncols = {}, [], 0
+        spans, placed = {}, []
         for ri, tr in enumerate(rows):
             ci, rowcells = 0, []
             def _skip(ci):
@@ -407,19 +328,17 @@ class Converter:
                     ci += wd
                 return ci
             ci = _skip(ci)
-            for cell in tr.element_children:
-                if cell.name not in ('td', 'th'): continue
-                cs, rs = int(cell.attrs.get('colspan', 1)), int(cell.attrs.get('rowspan', 1))
+            for cell in tr['cells']:
+                cs, rs = int(cell['attrs'].get('colspan', 1)), int(cell['attrs'].get('rowspan', 1))
                 rowcells.append(('cell', ci, cell, cs, rs))
                 for k in range(1, rs): spans[(ri + k, ci)] = cs
                 ci = _skip(ci + cs)
             placed.append(rowcells)
-            ncols = max(ncols, ci)
-        return placed, ncols
+        return placed
 
     def col_widths(self, el, ncols):
         "colwidths tracks -> (dxa list, all_fr?) or (None, False) when absent"
-        s = el.attrs.get('colwidths') or el.attrs.get('data-colwidths')
+        s = el['attrs'].get('colwidths') or el['attrs'].get('data-colwidths')
         if not s: return None, False
         tracks = parse_tracks(s)
         if len(tracks) != ncols:
@@ -432,166 +351,125 @@ class Converter:
         return dxa, fixed == 0
 
     def cell_blocks(self, cell, header):
-        "Cell content ending in a paragraph; header cells bold, align honored for inline cells."
-        if any(c.name in BLOCK_TAGS for c in cell.element_children):
-            blocks = self.blocks(cell)
-            if not blocks or blocks[-1].qname != (W, 'p'): blocks.append(Tree(e.p().bytes()).root)
-            return blocks
-        jc = [e.jc(val=cell.attrs.get('align'))] if cell.attrs.get('align') in ('center', 'right') else None
-        return [self.para(self.runs(cell, {'b': True} if header else {}), 'compact', jc)]
+        "Render cell blocks; Word requires a final paragraph."
+        content = cell['content']
+        if len(content) == 1 and content[0]['type'] == 'paragraph' and not content[0]['attrs']:
+            jc = [e.jc(val=cell['align'])] if cell['align'] in ('center', 'right') else None
+            return [self.para(self.runs(content[0]['children'], {'b': True} if header else {}), 'compact', jc)]
+        blocks = self.block_nodes(content)
+        if not blocks or blocks[-1].qname != (W, 'p'): blocks.append(Tree(e.p().bytes()).root)
+        return blocks
 
-    def table(self, el):
-        "w:tbl (+ caption paragraph before, spacer paragraph after)"
-        cap = None
-        rows, nhead, markers = [], 0, {}
-        def _add(c):
-            "Rows in order; template markers recorded at the row index they precede"
-            if c.name == 'template': markers.setdefault(len(rows), []).append(c)
-            else: rows.append(c)
-        for sec in el.element_children:
-            t = sec.name
-            if t == 'caption': cap = sec
-            elif t == 'thead':
-                for c in sec.element_children: _add(c)
-                nhead = len(rows)
-            elif t in ('tbody', 'tfoot'):
-                for c in sec.element_children: _add(c)
-            elif t in ('tr', 'template'): _add(sec)
-        if nhead and not any(tr.to_text().strip() for tr in rows[:nhead]):
-            # a markdown pipe table cannot omit its header row, so an all-empty thead means "headerless"
-            old, markers = markers, {}
-            for ri, ms in old.items(): markers.setdefault(max(0, ri - nhead), []).extend(ms)
-            rows, nhead = rows[nhead:], 0
-        placed, ncols = self.table_grid(rows)
-        dxa, all_fr = self.col_widths(el, ncols)
+    def table(self, node):
+        entries = [(section == 'head', entry) for section in ('head', 'rows', 'foot') for entry in node[section]]
+        head = [entry for header, entry in entries if header and entry['type'] == 'row']
+        if head and all(block['type'] == 'paragraph' and not block['children'] for row in head for cell in row['cells'] for block in cell['content']):
+            entries = [(header, entry) for header, entry in entries if not header or entry['type'] == 'operation']
+        rows = [entry for _, entry in entries if entry['type'] == 'row']
+        placed, ncols = self.table_grid(rows), node['columns']
+        dxa, all_fr = self.col_widths(node, ncols)
         def _tcw(ci, cs):
             if not dxa: return None
-            wd = sum(dxa[ci:ci + cs])
-            if all_fr: return e.tcW(type='pct', w=round(wd / self.content_w * 5000))
-            return e.tcW(type='dxa', w=wd)
-        tblw = (e.tblW(type='auto', w=0) if not dxa  # chkstyle: ignore-node
-            else e.tblW(type='pct', w=5000) if all_fr
-            else e.tblW(type='dxa', w=sum(dxa)))
-        tblpr = e.tblPr(e.tblStyle(val=self.custom_style(el, 'table') or _sid('table')), tblw,  # chkstyle: ignore-node
+            width = sum(dxa[ci:ci + cs])
+            return e.tcW(type='pct', w=round(width / self.content_w * 5000)) if all_fr else e.tcW(type='dxa', w=width)
+        tblw = e.tblW(type='auto', w=0) if not dxa else e.tblW(type='pct' if all_fr else 'dxa', w=5000 if all_fr else sum(dxa))
+        tblpr = e.tblPr(e.tblStyle(val=self.custom_style(node, 'table') or _sid('table')), tblw,
             e.tblLayout(type='fixed') if dxa and not all_fr else None,
             e.tblLook(val='04A0', firstRow=1, lastRow=0, firstColumn=0, lastColumn=0, noHBand=0, noVBand=1))
-        gw = dxa or [self.content_w // ncols] * ncols   # pandoc's docx reader drops tables whose gridCols lack w:w
-        grid = e.tblGrid(e.gridCol(w=gw[i]) for i in range(ncols))
+        widths = dxa or [self.content_w // ncols] * ncols
+        grid = e.tblGrid(e.gridCol(w=width) for width in widths)
         def _trpr(header=False):
-            return e.trPr(e.cantSplit(val='off' if el.attrs.get('keep-rows') == 'false' else 'on'), e.tblHeader() if header else None)
-        def _marker_tr(mel):
-            "A range marker between rows: one full-width literal cell, so forms keep their markers visible"
-            tcpr = e.tcPr(_tcw(0, ncols), e.gridSpan(val=ncols) if ncols > 1 else None)
-            return e.tr(_trpr(), e.tc(tcpr, self.para(self.tmpl_runs(mel, {}, 'row'))))
-        trs = []
-        for ri, rowcells in enumerate(placed):
-            for mel in markers.get(ri, []): trs.append(_marker_tr(mel))
-            tcs = []
-            for item in rowcells:
+            return e.trPr(e.cantSplit(val='off' if node['attrs'].get('keep-rows') == 'false' else 'on'), e.tblHeader() if header else None)
+        trs, ri = [], 0
+        for header, entry in entries:
+            if entry['type'] == 'operation':
+                tcpr = e.tcPr(_tcw(0, ncols), e.gridSpan(val=ncols) if ncols > 1 else None)
+                trs.append(e.tr(_trpr(), e.tc(tcpr, self.para(self.tmpl_runs(entry, {})))))
+                continue
+            cells = []
+            for item in placed[ri]:
                 if item[0] == 'cont':
-                    _, ci, wd = item
-                    tcs.append(e.tc(e.tcPr(_tcw(ci, wd), e.gridSpan(val=wd) if wd > 1 else None, e.vMerge()), e.p()))
+                    _, ci, width = item
+                    cells.append(e.tc(e.tcPr(_tcw(ci, width), e.gridSpan(val=width) if width > 1 else None, e.vMerge()), e.p()))
                 else:
                     _, ci, cell, cs, rs = item
                     tcpr = e.tcPr(_tcw(ci, cs), e.gridSpan(val=cs) if cs > 1 else None, e.vMerge(val='restart') if rs > 1 else None)
-                    body = self.cell_blocks(cell, ri < nhead)
-                    tcs.append(e.tc(tcpr, body))
-            trs.append(e.tr(_trpr(ri < nhead), tcs))
-        for mel in markers.get(len(rows), []): trs.append(_marker_tr(mel))
-        out = self.caption_para(el, 'tbl', cap)
-        return out + [Tree(e.tbl(tblpr, grid, trs).bytes()).root, Tree(e.p().bytes()).root]
+                    cells.append(e.tc(tcpr, self.cell_blocks(cell, header)))
+            trs.append(e.tr(_trpr(header), cells))
+            ri += 1
+        return self.caption_para(node, 'tbl', node['caption']) + [Tree(e.tbl(tblpr, grid, trs).bytes()).root, Tree(e.p().bytes()).root]
 
-    def caption_para(self, el, typ, capel, fmt={}):
-        """Numbered caption paragraph: 'Label N: text' with a SEQ field as N. When `el` has an id, the
-        label+number span is bookmarked under it (REF target) and the number alone under `<name>_n`.
-        Emitted whenever there is a caption or an id; the label word comes from reftypes[typ]."""
-        if capel is None and not el.attrs.get('id'): return []
+
+    def caption_para(self, node, typ, caption, fmt={}):
+        "A live SEQ caption with label and number-only bookmarks."
+        if not caption and not node['attrs'].get('id'): return []
         label = self.reftypes[typ][0]
-        seq = [self.field(rf'SEQ {label} \* ARABIC', '#', fmt)]
-        if i := el.attrs.get('id'):
-            nm = self.bkname(i)
-            self._bknames[i + '\0n'] = nm + '_n'   # reserve the number-only name too
-            self._bkid += 2
-            seq = [e.bookmarkStart(id=self._bkid, name=nm + '_n'), *seq, e.bookmarkEnd(id=self._bkid)]
-            runs = [e.bookmarkStart(id=self._bkid - 1, name=nm),  # chkstyle: ignore-node
-                *self.text_runs(label + ' ', fmt), *seq, e.bookmarkEnd(id=self._bkid - 1)]
-        else: runs = self.text_runs(label + ' ', fmt) + seq
-        cap = [] if capel is None else self.runs(capel, fmt)
-        if cap: runs += self.text_runs(': ', fmt) + cap
+        sequence = dict(fig='Figure', tbl='Table', eq='Equation')[typ]
+        seq = self.bookmark(node, [self.field(rf'SEQ {sequence} \* ARABIC', '#', fmt)], 'number')
+        runs = self.bookmark(node, self.text_runs(label + ' ', fmt) + seq)
+        if caption: runs += self.text_runs(': ', fmt)
+        if typ != 'eq': runs += self.bookmark(node, self.runs(caption, fmt), 'text')
         return [self.para(runs, 'caption')]
 
-    def figure(self, el):
-        "Figure: image paragraph, then its numbered caption paragraph below (Word convention)"
-        img = next((c for c in _walk(el) if c.name == 'img'), None)
-        capel = next((c for c in el.element_children if c.name == 'figcaption'), None)
-        alt = capel.to_text().strip() if capel is not None else None
-        out = [] if img is None else [self.para(self.image(img, {}, alt), 'body')]
-        return out + self.caption_para(el, 'fig', capel)
+
+    def figure(self, node):
+        saved, self.figure_alt = self.figure_alt, node['caption_text']
+        try: body = self.block_nodes(node['body'])
+        finally: self.figure_alt = saved
+        return body + self.caption_para(node, 'fig', node['caption'])
+
 
     # Paragraphs directly after these blocks (or at document start) take First Paragraph rather
     # than Body Text, matching pandoc's docx writer exactly, so the two agree on which is "first".
-    FIRST_AFTER = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'ul', 'ol', 'table', 'dl', 'hr'}
+    FIRST_AFTER = {'heading', 'block_quote', 'code_block', 'list', 'table', 'definition_list', 'thematic_break', 'math_block'}
 
-    def block(self, el, style='body', sid=None):
-        "Block elements for `el` (one element may yield several); `sid` is a custom-style id override for paragraphs"
-        out = self._block(el, style, sid)
-        tag = el.name
-        if tag in self.FIRST_AFTER or (tag == 'div' and el.has_class('display')): self.first = True
+    def block(self, node, style='body', sid=None):
+        out = self._block(node, style, sid)
+        if node['type'] in self.FIRST_AFTER: self.first = True
         return out
 
-    def _block(self, el, style, sid):
-        tag = el.name
-        if tag == 'p':
-            psid = self.custom_style(el, 'paragraph') or sid
-            return [self.prose(self.bookmark(el, self.runs(el, {})), style, psid)]
-        if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'): return [self.para(self.bookmark(el, self.runs(el, {})), tag)]
-        if tag == 'blockquote':
+    def _block(self, node, style, sid):
+        kind = node['type']
+        if kind == 'paragraph':
+            return [self.prose(self.bookmark(node, self.runs(node['children'], {})), style, self.custom_style(node, 'paragraph') or sid)]
+        if kind == 'heading': return [self.para(self.bookmark(node, self.runs(node['children'], {})), f'h{node["level"]}')]
+        if kind == 'block_quote':
             self.bq += 1
-            try: return self.blocks(el, 'blockquote')
+            try: return self.block_nodes(node['children'], 'blockquote')
             finally: self.bq -= 1
-        if tag == 'pre': return self.codeblock(el)
-        if tag in ('ul', 'ol'): return self.list_el(el)
-        if tag == 'table': return self.table(el)
-        if tag == 'hr': return [Tree(e.p(e.pPr(e.pBdr(e.bottom(val='single', sz=6, space=1, color='auto')))).bytes()).root]
-        if tag == 'dl': return self.dl(el)
-        if tag == 'script': return self.rawxml(el)
-        if tag == 'figure': return self.figure(el)
-        if tag == 'template': return [self.para(runs)] if (runs := self.tmpl_runs(el, {}, 'block')) else []
-        if tag == 'div':
-            if (panel := panel_parts(el)) is not None:
-                title, body, label = panel
-                runs = self.bookmark(title, self.runs(title, {'b': True})) if title is not None else self.text_runs(label, {'b': True})
-                return ([self.para(runs, style)] if runs else []) + self.block_nodes(body, style, sid)
-            if el.has_class('math') and el.has_class('display'): return [Tree(e.p(m.oMathPara(self.omath(el))).bytes()).root]
-            return self.blocks(el, style, self.custom_style(el, 'paragraph') or sid)
-        if tag in BLOCK_TAGS and any(c.name in BLOCK_TAGS for c in el.element_children):
-            return self.blocks(el, style, sid)   # unknown container: recurse
-        self.warn(f'unhandled block <{tag}>; emitted as plain paragraph')
-        return [self.para(self.runs(el, {}), style, None, sid)]
+        if kind == 'code_block': return self.codeblock(node)
+        if kind == 'list': return self.list_el(node)
+        if kind == 'table': return self.table(node)
+        if kind == 'thematic_break': return [Tree(e.p(e.pPr(e.pBdr(e.bottom(val='single', sz=6, space=1, color='auto')))).bytes()).root]
+        if kind == 'definition_list': return self.dl(node)
+        if kind == 'raw_block': return self.rawxml(node)
+        if kind == 'figure': return self.figure(node)
+        if kind == 'operation': return [self.para(runs)] if (runs := self.tmpl_runs(node, {})) else []
+        if kind == 'panel':
+            title = node['title']
+            runs = self.bookmark(title, self.runs(title['children'], {'b': True})) if title else self.text_runs(node['label'], {'b': True})
+            return ([self.para(runs, style)] if runs else []) + self.block_nodes(node['body'], style, sid)
+        if kind == 'math_block':
+            zone = Tree(e.p(m.oMathPara(self.omath(node['tex']))).bytes()).root
+            return [zone] + (self.caption_para(node, 'eq', []) if node['attrs'].get('id') else [])
+        if kind in ('div', 'element'): return self.block_nodes(node['children'], style, self.custom_style(node, 'paragraph') or sid)
+        return []
+
 
     RAWNS = ' '.join(f'xmlns:{k}="{v}"' for k, v in NS.items() if k != 'xml')
 
     BIND_NS = 'urn:mdhtml:fields'
     BIND_ID = '{8E2C9A44-7D31-4E5B-9C0D-1A6F2B3C4D5E}'   # fixed datastore id, so builds are reproducible
 
-    def tmpl_runs(self, el, fmt, form):
-        """Template-instruction runs. Non-value Mustache operations are converter policy: literal
-        marker runs, so an unfilled form shows its structure. Value operations go through the `tmpl`
-        callable with the semantic node dict (see `mdhtml.export.tmpl_node`): str is a literal text
-        run, ('field', instr) a live field, ('control', name) an interactive plain-text content
-        control, ('bound', name) a data-bound one, None dropped"""
-        if 'data-op' not in el.attrs: return []
-        node = tmpl_node(el, form)
-        action = node['op'].rsplit(':', 1)[-1]
-        if action != 'value':
-            marker = dict(section='#', inverted='^', end='/').get(action, '')
-            return self.text_runs(f'«{marker}{node["value"]}»', fmt)
-        if self.tmpl is None: return []
-        res = self.tmpl(node)
-        if res is None: return []
+    def tmpl_runs(self, node, fmt):
+        "Render a structured operation as text, a field, or a content control."
+        if node['syntax'] == 'mustache' and node['action'] in ('section', 'inverted', 'end'):
+            marker = dict(section='#', inverted='^', end='/')[node['action']]
+            return self.text_runs(f'«{marker}{node["name"]}»', fmt)
+        if self.tmpl is None or (res := self.tmpl(node)) is None: return []
         if isinstance(res, str): return self.text_runs(res, fmt)
         kind, val = res
-        if kind == 'field': return [self.field(val, f'«{node["value"]}»', fmt)]
+        if kind == 'field': return [self.field(val, f'«{node["name"]}»', fmt)]
         if kind in ('control', 'bound'):
             self.has_controls = True
             binding = None
@@ -604,54 +482,24 @@ class Converter:
         raise ValueError(f'unknown template rendering {res!r}')
 
 
-    def rawxml(self, el):
-        "Elements parsed from a raw docx payload (`{=docx}` in Markdown); other formats skip silently"
-        if el.attrs.get('type') != 'application/vnd.mdhtml.raw' or el.attrs.get('data-format') != 'docx': return []
-        payload, warn = decode_raw(el)
-        if warn:
-            self.warn(warn)
-            return []
-        try: return Tree(f'<m2d {self.RAWNS}>{payload}</m2d>'.encode()).root.children
-        except ValueError as e:
-            self.warn(f'malformed docx raw payload: {e}')
+
+    def rawxml(self, node):
+        "Parse a decoded raw docx payload as WordprocessingML."
+        if node['format'] != 'docx': return []
+        try: return Tree(f'<m2d {self.RAWNS}>{node["text"]}</m2d>'.encode()).root.children
+        except ValueError as ex:
+            self.warn(f'malformed docx raw payload: {ex}')
             return []
 
-    def dl(self, el):
-        "Definition list: dt/dd paragraphs in their dialect styles"
+    def dl(self, node):
         out = []
-        for c in el.element_children:
-            t = c.name
-            if t == 'dt': out.append(self.para(self.bookmark(c, self.runs(c, {})), 'dt'))
-            elif t == 'dd': out += self.blocks(c, 'dd')
+        for item in node['items']:
+            for term in item['terms']: out.append(self.para(self.bookmark(term, self.runs(term['children'], {})), 'dt'))
+            for definition in item['definitions']: out += self.block_nodes(definition, 'dd')
         return out
 
-    def blocks(self, parent, style='body', sid=None): return self.block_nodes(parent.children, style, sid)
+    def block_nodes(self, nodes, style='body', sid=None): return [block for node in nodes for block in self.block(node, style, sid)]
 
-    def block_nodes(self, nodes, style='body', sid=None):
-        out, inline = [], []
-        def flush():
-            meaningful = [n for n in inline if not isinstance(n, Text) or n.text.strip()]
-            if not meaningful:
-                inline.clear()
-                return
-            raw = all(isinstance(n, Element) and _is_raw(n) for n in meaningful)
-            if raw:
-                for node in meaningful: out.extend(self.block(node, style, sid))
-            else: out.append(self.prose(self.group_runs(inline, {}), style, sid))
-            inline.clear()
-        for node in nodes:
-            if isinstance(node, Comment): continue
-            if isinstance(node, Element) and node.name == 'template':
-                flush()
-                if runs := self.tmpl_runs(node, {}, 'block'): out.append(self.para(runs))
-                continue
-            if isinstance(node, Element) and (node.name in INERT_TAGS or node.name == 'script' and not _is_raw(node)): continue
-            if isinstance(node, Element) and node.name in BLOCK_TAGS:
-                flush()
-                out.extend(self.block(node, style, sid))
-            elif isinstance(node, (Text, Element)): inline.append(node)
-        flush()
-        return out
 
     # ---- assembly -----------------------------------------------------------
     BULLETS = ['•', '◦', '▪']
@@ -714,27 +562,21 @@ class Converter:
                 e.name(val='Placeholder Text'), e.basedOn(val='DefaultParagraphFont'), e.semiHidden(),
                 e.rPr(e.color(val='808080')), type='character', styleId='PlaceholderText'))
 
-    def harvest_footnotes(self, els):
-        "Split out footnote endnote sections, indexing their li definitions by id; returns body elements"
-        body, fn = [], []
-        for el in els:
-            is_notes = isinstance(el, Element) and el.name == 'section' and el.has_class('footnotes')
-            (fn if is_notes else body).append(el)
-        self.fndefs.update({li.attrs.get('id'): li for sec in fn for li in _walk(sec) if li.name == 'li' and li.attrs.get('id')})
-        return body
-
-    def to_docx(self, mdhtml, dest):
-        root = parse_frag(mdhtml)
-        for note in list(self.doc.footnotes): note.delete()  # the reference supplies styles, not notes
-        nodes = self.harvest_footnotes(root.children)
-        self.idtext, self.reftarget, self.res = {}, {}, Resolver(self.reftypes)
-        for el in (el for node in nodes if isinstance(node, Element) for el in _walk(node)):
-            if not (i := el.attrs.get('id')): continue
-            self.idtext[i] = ' '.join(el.to_text().split())
-            k = target_kind(el.name)
-            if k: self.reftarget[i] = k
-            self.res.register(i, k, self.idtext[i])
-        blocks = self.block_nodes(nodes)
+    def to_docx(self, source, dest):
+        document = import_mdhtml(source)
+        self.index = document.index(reftypes=self.reftypes, number_headings=self.number_headings)
+        self.reftypes = self.index.reftypes
+        option = self.index.number_headings
+        self.scheme = HeadingNums(option).scheme if option else None
+        if self.scheme:
+            heading = next(s for s in self.styles.elements(w.Style) if s.attribute(W, 'styleId') == 'Heading1')
+            if next(heading.elements(w.NumberingProperties), None) is None:
+                self._numid += 1
+                self.headnum = self._numid
+        self.warnings.extend(document.warnings)
+        self.fndefs = document.footnotes
+        for note in list(self.doc.footnotes): note.delete()
+        blocks = self.block_nodes(document.blocks)
         self.package.replace_part(self.package.main_part, _partxml.document(e.body(blocks, self.sectpr)).bytes())
         if self.nums or self.headnum: self._update_numbering()
         if self.bound: self.doc.set_custom_xml(self.BIND_ID, self.bind_item_xml(), schema_uri=self.BIND_NS)
@@ -743,27 +585,22 @@ class Converter:
         self.doc.save(dest)
         return self.warnings
 
+
 def mustache_fields(node):
-    "Template variables as live Word `MERGEFIELD`s (markers never reach `tmpl`: the converter shows them literally)"
-    return 'field', f'MERGEFIELD {node["value"]}'
+    "Render a variable operation as a live Word MERGEFIELD."
+    return 'field', f'MERGEFIELD {node["name"]}'
 
 
 
-def mdhtml2docx(mdhtml, dest, reference=None, base=None, reftypes=None, number_headings=None, tmpl=None):
-    """Convert an MDHTML string or mutable fast5ever DOM to a docx file at `dest`; returns warnings.
-    `reference` is a reference docx path, or a list of them: the first supplies the whole archive
-    (default, or when None: the built-in template), later entries contribute styles only, later-wins -
-    each a .docx path, a raw styles/numbering .xml path, or a fastpylight theme name (whose Hl*/Source
-    Code styles are generated; see styles.theme_ref). Default adds 'github_light' when fastpylight is
-    installed, so code blocks are colored; pass a bare reference for plain code. Relative image srcs
-    resolve against `base` ('.'). Cross-references (`data-ref` anchors from Markdown `[@sec-x]`) become
-    live REF fields; `reftypes` maps type tokens to (singular, plural) prefix words beyond the built-in
-    `sec`, and `number_headings` (a styles.SCHEMES name such as 'legal', or a {lvlText: numFmt} dict, one entry per heading level)
-    numbers the headings via a multilevel list so `\\w` fields resolve; scheme level 0 is the h1 document title (Title style), whose empty lvlText shows nothing and whose counter restarts the levels below. Template value instructions are dropped
-    unless `tmpl` is given; other operations remain visible markers. `tmpl` is a callable taking the semantic instruction dict
-    (`mdhtml.export.tmpl_node`: `op`, `value`, `form`) and returning a str for a literal text run,
-    `('field', instr)` for a live field, `('control', name)` for an interactive plain-text content
-    control, `('bound', name)` for a content control data-bound to a shared per-variable XML node
-    (same-name controls stay in sync as one is filled), or None to drop; range markers never reach `tmpl` and render as literal «body» runs - `mustache_fields` here
-    is the ready-made recipe."""
+
+def mdhtml2docx(
+    mdhtml, # Semantic Document or symbolic MDHTML
+    dest, # Output docx path
+    reference=None, # Reference docx, contributor list, or default template and theme
+    base=None, # Base directory for local images
+    reftypes=None, # Additional singular/plural reference labels
+    number_headings=None, # Heading scheme; None inherits document policy, False disables
+    tmpl=None, # Structured operation renderer: text, field/control/bound tuple, or None
+):
+    "Write a semantic document as docx with native Word references; return conversion warnings."
     return Converter(reference, base, reftypes, number_headings, tmpl).to_docx(mdhtml, dest)

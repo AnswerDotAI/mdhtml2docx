@@ -1,34 +1,33 @@
 # mdhtml2docx
 
-Convert [MDHTML](https://github.com/AnswerDotAI/mdhtml) to Word docx files.
+Write [mdhtml](https://github.com/AnswerDotAI/mdhtml) documents as Word docx files.
 
-`mdhtml` renders Markdown to an HTML5 document format shared by format-specific exporters. `mdhtml2docx` converts its portable core to docx from scratch. It uses [fast5ever](https://github.com/AnswerDotAI/fast5ever)'s mutable WHATWG DOM for input and `oxml` for WordprocessingML construction, reference editing, DOCX packaging, and atomic saving. XML construction uses namespace-bound factories such as `e.tcW(type='dxa', w=2400)`, backed by fastcore's XML builder. Conversion requires neither lxml nor a .NET or Office runtime.
+`mdhtml2docx` consumes mdhtml's semantic `Document` API. The shared importer handles HTML5 parsing, raw-data decoding, and document structure. The shared reference index validates and plans references. `oxml` provides WordprocessingML construction, reference editing, DOCX packaging, and atomic saving. XML construction uses namespace-bound factories such as `e.tcW(type='dxa', w=2400)`, backed by fastcore's XML builder. Conversion requires neither lxml nor a .NET or Office runtime.
 
-MDHTML accepts the full HTML vocabulary. This exporter supports the elements and annotations listed below. It preserves the text of unknown inline elements and recurses through block containers. It returns a warning when an unsupported block must become a plain paragraph. HTML parsing and repair belong to `mdhtml`.
+MDHTML accepts the full HTML vocabulary. This exporter supports the elements and annotations listed below. It preserves the text of unknown inline elements and recurses through block containers. HTML parsing and repair belong to `mdhtml`.
 
 ## Usage
 
 ```python
-from mdhtml import md2mdhtml
+from mdhtml import parse_md
 from mdhtml2docx import mdhtml2docx
 
-html = md2mdhtml(markdown_text)
-warnings = mdhtml2docx(html, 'out.docx')
-```
-
-`mdhtml2docx` takes an MDHTML string, writes a docx, and returns a list of warning strings. It parses strings with `mdhtml.mdhtml2dom`. Normal HTML5 repair applies; the input need not be well-formed XML.
-
-You can also pass an existing mutable fast5ever DOM:
-
-```python
-from mdhtml import mdhtml2dom
-
-document = mdhtml2dom(html)
-document.children[0].attrs['custom-style'] = 'Contract Title'
+document = parse_md(markdown_text)
 warnings = mdhtml2docx(document, 'out.docx')
 ```
 
-Body-position text and phrasing content become implicit Word paragraphs. Whitespace between blocks does not produce content. HTML templates are not rendered.
+`mdhtml2docx` accepts a semantic `Document` or symbolic MDHTML, writes a docx, and returns warning strings. Normal HTML5 repair applies when importing MDHTML; the input need not be well-formed XML.
+
+Import existing MDHTML through the same document API:
+
+```python
+from mdhtml import Document
+
+document = Document.from_mdhtml(html)
+warnings = mdhtml2docx(document, 'out.docx')
+```
+
+The importer groups body-position text and phrasing content into paragraphs. The exporter reads ordinary dictionary snapshots of the semantic blocks, inlines, and note definitions. Operation arguments remain inert unless an operation renderer selects them.
 
 ## Supported content
 
@@ -45,6 +44,8 @@ The exporter supports these elements:
 A `details` div becomes its label as a bold line above the body. It does not become a numbered heading or retain its collapsible behavior.
 
 Math spans and blocks become native Word math zones (`m:oMath`). These contain the source text unchanged, whether TeX, UnicodeMath, or AsciiMath. Math build-up and rendering are left to downstream tools. Pandoc reads the zones back as math.
+
+An id-bearing display equation receives a live `Equation N` caption below its math zone. Unlabelled equations remain unnumbered.
 
 When [fastpylight](https://github.com/AnswerDotAI/fastpylight) is installed, code blocks with a language use syntax coloring. Tokens receive `Hl*` character styles such as `Hl Keyword`. Their colors come from the reference theme described below. You can restyle them in Word.
 
@@ -89,13 +90,7 @@ The converter accepts MDHTML raw data with `data-format="docx"`:
 
 A ```` ```{=docx} ```` fenced block in Markdown, or inline code followed by `{=docx}`, produces this element. The payload is parsed as WordprocessingML and inserted verbatim. Block payloads contain elements such as `w:p` or `w:tbl`. Inline payloads contain elements such as `w:r`. The prefixes `w`, `r`, `wp`, `a`, `pic`, and `m` are predeclared.
 
-Payload encoding follows these rules:
-
-- No `data-encoding`: use the literal payload.
-- `data-encoding="html"`: perform one character-reference decoding pass.
-- `data-encoding="base64"`: decode a base64-encoded UTF-8 payload.
-
-Malformed payloads and unknown encodings are dropped with a warning. Raw data for other formats is skipped silently.
+The shared mdhtml importer decodes payloads according to its raw-data contract. This exporter parses decoded `docx` payloads as WordprocessingML. Invalid encodings and malformed XML produce warnings. Other formats are skipped.
 
 For example, insert a page break with:
 
@@ -125,7 +120,7 @@ A missing target id raises a conversion error. A reference type with no defined 
 
 Number fields require numbered headings. If your reference docx already numbers its heading styles, the converter leaves that numbering unchanged.
 
-Otherwise, select a scheme with `number_headings`:
+The shared reference index resolves `number_headings` against document metadata. Numeric heading references infer decimal numbering when no scheme is supplied. You can select a scheme explicitly:
 
 - `'legal'` uses 1. / (a) / (i) numbering.
 - `'decimal'` uses 1. / 1.1. / 1.1.1. numbering.
@@ -135,15 +130,17 @@ The named schemes come from mdhtml's `SCHEMES`. The custom dictionary uses the s
 
 A reference-list entry ending in `.xml` can also supply styles and numbering. It contains raw `w:style`, `w:abstractNum`, and `w:num` elements. Each contributor's ids and references are remapped before merging, so separate contributors can reuse the same original numbering ids; later styles still win.
 
-### Figures and tables
+### Figures, tables, and equations
 
-Figures and captioned tables use live SEQ fields. A figure's caption appears below its image as "Figure 1: caption", using the caption style. A table's caption appears above it as "Table 1: caption".
+Figures, captioned tables, and id-bearing display equations use independent live SEQ fields. A figure's caption appears below its body as "Figure 1: caption". A table's caption appears above it as "Table 1: caption". Equations receive an "Equation 1" caption below the math zone. Labels come from `reftypes`; changing a label never merges the counters.
 
-When the element has an id, the converter bookmarks its label and number. `[@fig-plot]` inserts "Figure 1" from that bookmark without adding another prefix. A second, number-only bookmark supplies the bare number for references such as `[-@tbl-stages]`.
+When the element has an id, the converter bookmarks its label, number, and authored caption separately. The shared reference planner supplies prefix words; each Word REF field supplies only the live number. Thus `[@fig-plot]` displays "Figure 1", while `[-@tbl-stages]` displays only the number.
 
-`fig` and `tbl` are built-in reference types alongside `sec`. Their labels come from the same `reftypes` table. Same-type groups pluralize once. Mixed-type groups use each item's singular prefix, as in "Figure 1 and Table 2".
+Figure and table `{ref=text}` references use a separate bookmark containing the authored caption text. Generated bookmark names are reserved through the same collision-safe allocator as authored targets, including forward references. Equation references support full labels, bare numbers, and pages. `{ref=text}` to equation source is not supported by the Word exporter.
 
-Reference targets must be headings, paragraphs, figures, or tables with ids. A reference to anything else raises a conversion error.
+`fig`, `tbl`, and `eq` are built-in reference types alongside `sec`. Grouped references use the shared planner's plural prefixes and separators, such as "Figures 1 and 2".
+
+Reference targets include headings, paragraphs, figures, tables, equations, spans, and definition terms with ids. Paragraphs support text and page references; spans and definition terms support text and page references. Target and variant validation belongs to mdhtml.
 
 ## Validation
 

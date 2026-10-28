@@ -2,11 +2,11 @@
 
 ## Input and output trees
 
-`mdhtml2docx` accepts an MDHTML string or an existing fast5ever node. Strings are parsed once by `mdhtml.mdhtml2dom`. Converter code walks fast5ever's element, text, and comment nodes in document order; it does not project them into an XML tree.
+`mdhtml2docx` consumes the native mdhtml `Document` API. `import_mdhtml` accepts a document or imports symbolic MDHTML through the shared HTML5 importer. Converter code reads semantic dictionary snapshots from `Document.blocks` and `Document.footnotes`. It performs no HTML grouping, raw-data decoding, target discovery, or reference-token parsing. `ReferenceIndex.plan` supplies validated target kinds, variants, prefixes, and group separators for live Word fields.
 
 Construction functions use `oxml.e` for WordprocessingML and configured `oxml.E` factories for math and custom namespaces. Factories create detached `oxml.XML` expressions backed by fastcore's namespace-aware builder. Completed blocks are live `oxml.Element` objects. Table cells end with paragraphs, and footnote blocks already contain their reference marks. Final document and footnote assembly serializes those blocks without reparsing or repairing whole parts. Parsed raw payloads and reference elements compose into expressions as namespace-preserving snapshots.
 
-Reference styles, numbering, and settings stay in the package's cached live trees; `Document.save()` flushes their edits. Only generated parts are replaced with new bytes. `oxml.Document` owns content types, relationships, and atomic saving. Keeping the HTML input and XML output types distinct prevents XML rules from leaking into MDHTML handling.
+Reference styles, numbering, and settings stay in the package's cached live trees; `Document.save()` flushes their edits. Only generated parts are replaced with new bytes. `oxml.Document` owns content types, relationships, and atomic saving. Keeping the semantic input and XML output types distinct prevents XML rules from leaking into mdhtml handling.
 
 Construction uses keyword attributes: `e.tcW(type='dxa', w=width)` qualifies both names with `w`. Cross-prefix attributes use `r__id` or `xml__space`; copied literal attribute mappings use `attrs_`. Namespace bindings belong to factories, not parent expressions. Run properties are built incrementally by calling a detached expression, such as `props(e.b(), e.bCs())`; an empty properties container is omitted. Calling a live parent, such as `root(e.num(...))`, attaches an expression in schema order and returns its live child. Word-specific content rules remain in the exporter: table cells end with paragraphs and footnotes receive reference marks. Explicit text positions use `parent(expression, index=n)`, counting all XML child nodes, including comments and whitespace. No lxml-compatible tree facade is used.
 
@@ -18,7 +18,7 @@ Load the template's numbering IDs before processing contributors. Each XML contr
 
 Bound controls retain the exporter's fixed datastore ID for reproducible builds. The converter supplies the field inventory to `Document.set_custom_xml()`; `oxml` owns the datastore properties, part names, and relationships. When a generated reference already contains that datastore, replace its field inventory rather than creating a second store with the same ID; unrelated custom XML stores are preserved.
 
-Body-level phrasing runs are grouped into implicit Word paragraphs according to the MDHTML dialect. Explicit and implicit prose share first-paragraph styling and quote indentation; definition descriptions use the same block walker. Field construction also marks the document for field updates on open. HTML template contents remain outside the ordinary child sequence and are inert. Raw docx scripts are decoded at the point where they are converted into WordprocessingML.
+The shared importer groups body-level phrasing runs into paragraphs. Explicit and implicit prose share first-paragraph styling and quote indentation. Definition descriptions and table cells use the same block walker. Ordered table entries preserve rows and operations without a second marker inventory. Field construction marks the document for field updates on open. Operation arguments remain inert. The converter parses already-decoded raw docx text as WordprocessingML.
 
 ## Tests
 
@@ -28,7 +28,7 @@ The `dev` extra includes lxml and pytest. The suite also uses Pandoc, fastcore, 
 pytest -q
 ```
 
-The default suite exercises a rich publication, numbered agreements and captions, mutable HTML/raw recovery, reference composition and reuse, and template lifecycles. These stories need only installed dependencies, not the sibling `mdhtml` sample checkout. Each conversion checks archive CRCs, `oxml.Document.validate()` (including the ECMA/MS-DOCX XSD checks now owned by `oxml`), and referenced styles. Pandoc's independent docx reader checks recovered content. Direct XML checks retain numbering bindings and restarts, footnote structure, renamed reference parts, relationship scopes, media collisions, and untouched reference content. Keep schema validation and independent Pandoc round trips. Input MDHTML fixtures should use ordinary HTML serialization rather than XHTML spellings.
+The default suite exercises a rich publication, numbered agreements and captions, semantic HTML/raw recovery, reference composition and reuse, and template lifecycles. These stories need only installed dependencies, not the sibling `mdhtml` sample checkout. Each conversion checks archive CRCs, `oxml.Document.validate()` (including the ECMA/MS-DOCX XSD checks now owned by `oxml`), and referenced styles. Pandoc's independent docx reader checks recovered content. Direct XML checks retain numbering bindings and restarts, footnote structure, renamed reference parts, relationship scopes, media collisions, and untouched reference content. Keep schema validation and independent Pandoc round trips. Input MDHTML fixtures should use ordinary HTML serialization rather than XHTML spellings.
 
 The no-lxml test checks only the dependency boundary: a minimal conversion in a fresh interpreter with lxml imports blocked. Feature behavior belongs in the normal converter tests, not a second suite embedded in a subprocess. `tools/createref.py` remains a development-only lxml user and requires the dev extra; it is not part of conversion.
 

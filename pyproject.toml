@@ -15,7 +15,7 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = ["mdhtml>=0.1.39", "fast5ever>=0.1.5", "oxml>=0.1.4"]
+dependencies = ["mdhtml>=0.1.43", "oxml>=0.1.4"]
 
 [project.optional-dependencies]
 dev = [
