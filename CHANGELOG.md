@@ -1,5 +1,12 @@
 <!-- do not remove -->
 
+## 0.1.6
+
+### New Features
+
+- Add bibliography and citation support with `cite_style` option, using mdhtml prepare for static citations and live Word REF fields ([#20](https://github.com/AnswerDotAI/mdhtml2docx/issues/20))
+
+
 ## 0.1.5
 
 ### New Features
