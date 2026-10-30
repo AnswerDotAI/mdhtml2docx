@@ -3,7 +3,7 @@ from pathlib import Path
 from lxml import etree
 from oxml import Document, e, w, namespaces
 
-from mdhtml import Document as MdDocument, md2mdhtml
+from mdhtml import Document as MdDocument, md2mdhtml, parse_md
 from mdhtml.mustache import MUSTACHE
 from mdhtml2docx.mdhtml2docx import mdhtml2docx, mustache_fields
 from mdhtml2docx.styles import ref_path, theme_ref
@@ -42,6 +42,30 @@ def test_conversion_without_lxml(tmp_path):
     code = ("import sys\nsys.modules['lxml'] = None\nfrom mdhtml2docx import mdhtml2docx\n"
         "mdhtml2docx('<p>Hello</p>', sys.argv[1])")
     subprocess.run([sys.executable, '-c', code, str(tmp_path/'t.docx')], check=True, timeout=60)
+
+
+def test_paper_citations_and_live_references(tmp_path):
+    src = parse_md(r'''---
+cite_style: numeric
+---
+
+## Results {#sec-results}
+
+See [@ruder], [@ruder]{ref=text}, and [@sec-results, final paragraph].
+
+::: bibliography
+Howard and Ruder {#ruder year=2018}
+: Jeremy Howard and Sebastian Ruder. *Universal Language Model Fine-tuning*.
+:::
+''')
+    for style, citation in [('numeric', 'Howard and Ruder [1]'), ('author-year', 'Howard and Ruder (2018)')]:
+        out = tmp_path/f'{style}.docx'
+        doc = convert(src, out, cite_style=style)
+        assert citation in doc.story.text and 'Jeremy Howard' in doc.story.text and 'final paragraph' in doc.story.text
+        assert len(fields(doc)) == 1 and fields(doc)[0].startswith('REF sec_results ')
+        assert 'ruder' in {b.name for b in doc.main.xml.elements(w.BookmarkStart)}
+        recovered = pandoc(out)
+        assert 'Howard and Ruder' in recovered and '*Universal Language Model Fine-tuning*' in recovered
 
 
 def test_rich_publication(tmp_path):

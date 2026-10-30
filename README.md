@@ -100,6 +100,8 @@ For example, insert a page break with:
 
 ## Cross-references
 
+Bibliographies and citations use mdhtml's shared Rust preparation. `::: bibliography` entries contain citation-author terms with ids and optional `year` attributes, followed by their formatted definitions. Citations use `[@key]`, narrative `{ref=text}`, author-suppressing `-@`, and per-item prefix/suffix text. `cite_style='numeric'` selects numbers in bibliography order; `'author-year'` selects author-year text. None inherits frontmatter. Citations become static linked text and bibliography entries retain their bookmarks. Section, page, figure and table cross-references remain native Word fields. Re-export the original document to change citation style.
+
 Markdown references such as `[@sec-payment]` become live Word REF fields. MDHTML represents them as `a` elements with `data-ref`.
 
 The default field is `REF <bookmark> \w \h`. It displays the full-context paragraph number, such as "3.(c)(iii)", as a hyperlink. The converter sets `updateFields` in `settings.xml` so Word refreshes fields on open.

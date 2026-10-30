@@ -159,12 +159,7 @@ class Converter:
             self._bknames[key] = nm
         return self._bknames[key]
 
-    def references(self, items, fmt):
-        out = []
-        for part in self.index.plan(items):
-            out += self.text_runs(part['separator'] + part['prefix'], fmt)
-            out += self.ref_fld(part, fmt)
-        return out
+    def references(self, items, fmt): return self.runs(self.index.plan(items), fmt)
 
     def ref_fld(self, part, fmt):
         "Map a shared reference plan to a live Word REF or PAGEREF field."
@@ -236,6 +231,7 @@ class Converter:
         if kind == 'text': return self.text_runs(node['text'], fmt)
         if kind == 'soft_break': return self.text_runs(' ', fmt)
         if kind == 'hard_break': return [e.r(self.rpr(fmt), e.br())]
+        if kind == 'reference_field': return self.text_runs(node['prefix'], fmt) + self.ref_fld(node, fmt)
         tag = node.get('tag') if kind == 'element_inline' else kind
         if tag in self.INLINE_FMT: out = self.runs(node['children'], fmt | self.INLINE_FMT[tag])
         elif kind == 'code': out = self.text_runs(node['text'], fmt | {'rstyle': _sid('codeinline')})
@@ -562,9 +558,8 @@ class Converter:
                 e.name(val='Placeholder Text'), e.basedOn(val='DefaultParagraphFont'), e.semiHidden(),
                 e.rPr(e.color(val='808080')), type='character', styleId='PlaceholderText'))
 
-    def to_docx(self, source, dest):
-        document = import_mdhtml(source)
-        self.index = document.index(reftypes=self.reftypes, number_headings=self.number_headings)
+    def to_docx(self, source, dest, cite_style=None):
+        document, self.index = import_mdhtml(source).prepare(reftypes=self.reftypes, number_headings=self.number_headings, cite_style=cite_style)
         self.reftypes = self.index.reftypes
         option = self.index.number_headings
         self.scheme = HeadingNums(option).scheme if option else None
@@ -601,6 +596,7 @@ def mdhtml2docx(
     reftypes=None, # Additional singular/plural reference labels
     number_headings=None, # Heading scheme; None inherits document policy, False disables
     tmpl=None, # Structured operation renderer: text, field/control/bound tuple, or None
+    cite_style=None, # Citation style; None inherits document metadata
 ):
     "Write a semantic document as docx with native Word references; return conversion warnings."
-    return Converter(reference, base, reftypes, number_headings, tmpl).to_docx(mdhtml, dest)
+    return Converter(reference, base, reftypes, number_headings, tmpl).to_docx(mdhtml, dest, cite_style)
