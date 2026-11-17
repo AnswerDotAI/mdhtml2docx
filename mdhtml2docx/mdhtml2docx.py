@@ -34,6 +34,7 @@ class Converter:
         self.base = Path(base or '.')
         self.warnings = []
         self.bq = 0          # blockquote nesting depth
+        self.in_output = False  # inside a notebook cell's output, where headings are not document sections
         self._bkid = 0       # bookmark id counter
         self.nums = []       # (numId, abstractNumId, start) per list instance
         self.fndefs = {}     # footnote label -> semantic blocks
@@ -428,7 +429,9 @@ class Converter:
         kind = node['type']
         if kind == 'paragraph':
             return [self.prose(self.bookmark(node, self.runs(node['children'], {})), style, self.custom_style(node, 'paragraph') or sid)]
-        if kind == 'heading': return [self.para(self.bookmark(node, self.runs(node['children'], {})), f'h{node["level"]}')]
+        if kind == 'heading':
+            if self.in_output: return [self.para(self.bookmark(node, self.runs(node['children'], {'b': True})), style)]
+            return [self.para(self.bookmark(node, self.runs(node['children'], {})), f'h{node["level"]}')]
         if kind == 'block_quote':
             self.bq += 1
             try: return self.block_nodes(node['children'], 'blockquote')
@@ -449,6 +452,10 @@ class Converter:
             zone = Tree(e.p(m.oMathPara(self.omath(node['tex']))).bytes()).root
             return [zone] + (self.caption_para(node, 'eq', []) if node['attrs'].get('id') else [])
         if kind in ('div', 'element'): return self.block_nodes(node['children'], style, self.custom_style(node, 'paragraph') or sid)
+        if kind == 'cell':
+            res, self.in_output = self.block_nodes(node['source'], style, sid), True
+            try: return res + (self.block_nodes(node['output']['blocks'], style, sid) if node['output'] else [])
+            finally: self.in_output = False
         return []
 
 

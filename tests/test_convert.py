@@ -101,6 +101,7 @@ def test_rich_publication(tmp_path):
     for state in ('fixed', 'open', 'closed'):
         src += (f'<div data-panel data-callout="warning" data-disclosure="{state}"><header>The <em>label</em></header>'
             'Body text<p>More body</p><h3>Actual heading</h3></div>')
+    src += '<div data-cell="code"><pre><code>cell source</code></pre><div data-output><p>cell output</p><h2>Printed heading</h2></div></div>'
     doc = convert(src, out)
     tree, text = doc.main.xml, pandoc(out)
     for fragment in ('Hello *world* with **bold** and ***both***.', 'café', '# Sub *title*', '[the title](#top)',
@@ -109,6 +110,7 @@ def test_rich_publication(tmp_path):
         'The note text', r'mc\hat{}2$$', '**Details label**', 'Details body', '## Actual heading'):
         assert fragment in text
     assert '↩' not in text and '# Details label' not in text
+    assert 'cell source' in text and 'cell output' in text and '**Printed heading**' in text and '# Printed heading' not in text
     assert not any(line.startswith('#') and 'label' in line for line in text.splitlines())
     assert text.count('Body text') == text.count('More body') == text.count('Actual heading') == 3
     assert doc.story.text.count('The label') == 3
