@@ -453,7 +453,7 @@ class Converter:
             return [zone] + (self.caption_para(node, 'eq', []) if node['attrs'].get('id') else [])
         if kind in ('div', 'element'): return self.block_nodes(node['children'], style, self.custom_style(node, 'paragraph') or sid)
         if kind == 'cell':
-            res, self.in_output = self.block_nodes(node['source'], style, sid), True
+            res, self.in_output = self.block_nodes(node['source']['blocks'], style, sid), True
             try: return res + (self.block_nodes(node['output']['blocks'], style, sid) if node['output'] else [])
             finally: self.in_output = False
         return []
@@ -576,7 +576,7 @@ class Converter:
                 self._numid += 1
                 self.headnum = self._numid
         self.warnings.extend(document.warnings)
-        self.fndefs = document.footnotes
+        self.fndefs = document.all_footnotes
         for note in list(self.doc.footnotes): note.delete()
         blocks = self.block_nodes(document.blocks)
         self.package.replace_part(self.package.main_part, _partxml.document(e.body(blocks, self.sectpr)).bytes())
