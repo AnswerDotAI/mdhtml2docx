@@ -68,6 +68,20 @@ Howard and Ruder {#ruder year=2018}
         assert 'Howard and Ruder' in recovered and '*Universal Language Model Fine-tuning*' in recovered
 
 
+def test_notebook_footnotes(tmp_path):
+    from aidialog.dialog import Message
+    from mdhtml import parse_dlg
+    source = parse_dlg([Message('Article.[^1]\n\n[^1]: Article source.', msg_type='note'),
+        Message('Question?', msg_type='prompt', output='Response.[^1]\n\n[^1]: Response source.')])
+    out = tmp_path/'notebook.docx'
+    doc = convert(source, out)
+    assert len(source.footnotes) == 1 and len(source.all_footnotes) == 2
+    references = list(doc.main.xml.elements(w.FootnoteReference))
+    assert len(references) == 2 and references[0].id != references[1].id
+    recovered = pandoc(out)
+    assert 'Article source.' in recovered and 'Response source.' in recovered
+
+
 def test_rich_publication(tmp_path):
     "A publication mixes prose, nested structures, images, notes and math; another reader recovers its content."
     out = tmp_path/'publication.docx'
@@ -101,6 +115,7 @@ def test_rich_publication(tmp_path):
     for state in ('fixed', 'open', 'closed'):
         src += (f'<div data-panel data-callout="warning" data-disclosure="{state}"><header>The <em>label</em></header>'
             'Body text<p>More body</p><h3>Actual heading</h3></div>')
+    src += '<div data-cell="code"><pre><code>cell source</code></pre><div data-output><p>cell output</p><h2>Printed heading</h2></div></div>'
     doc = convert(src, out)
     tree, text = doc.main.xml, pandoc(out)
     for fragment in ('Hello *world* with **bold** and ***both***.', 'café', '# Sub *title*', '[the title](#top)',
@@ -109,6 +124,7 @@ def test_rich_publication(tmp_path):
         'The note text', r'mc\hat{}2$$', '**Details label**', 'Details body', '## Actual heading'):
         assert fragment in text
     assert '↩' not in text and '# Details label' not in text
+    assert 'cell source' in text and 'cell output' in text and '**Printed heading**' in text and '# Printed heading' not in text
     assert not any(line.startswith('#') and 'label' in line for line in text.splitlines())
     assert text.count('Body text') == text.count('More body') == text.count('Actual heading') == 3
     assert doc.story.text.count('The label') == 3
